@@ -1,3 +1,60 @@
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+venv/
+env/
+.venv/
+.env/
+
+# Build / distribution
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+
+# Logs and runtime files
+*.log
+*.pid
+*.seed
+*.bak
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# IDE / editor files
+.vscode/
+.idea/
+*.sublime-workspace
+*.sublime-project
+
+# Test and coverage
+.coverage
+htmlcov/
+.tox/
+.nox/
+.pytest_cache/
+
+# Environment variables
+.envrc
+.env.local
+.env.*.local
+
+# Neovim / Vim
+*.swp
+*.swo
+*.swn
+*.tmp
+Session.vim
+.tagged
+
 # C++ objects and libs
 *.slo
 *.lo
