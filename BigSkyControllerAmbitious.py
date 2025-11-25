@@ -71,7 +71,7 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
       self.update_fLampEnergy()
       self.lastUpdateOutput.setText(str(tiempo))#
       self.updateFreq()
-    else: self.label.setText("Laser not found. This is a dummy GUI\n"+labelString)
+    else: self.label.setText("Laser not found. This is a dummy GUI\n"+self.labelString)
 
     self.frequencyDoubleSpinBox.setEnabled(not(self.flashLampMode));
     self.frequencyConfirmationButton.setEnabled(not(self.flashLampMode))
