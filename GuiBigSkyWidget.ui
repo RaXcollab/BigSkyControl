@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>774</width>
-    <height>741</height>
+    <height>950</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -401,27 +401,150 @@ Power @ 10Hz:</string>
         <layout class="QHBoxLayout" name="horizontalLayout_4"/>
        </item>
        <item>
-        <widget class="QPushButton" name="lampActivationButton">
-         <property name="font">
-          <font>
-           <pointsize>16</pointsize>
-          </font>
-         </property>
-         <property name="text">
-          <string>START</string>
-         </property>
+        <widget class="QFrame" name="separator1">
+         <property name="frameShape"><enum>QFrame::HLine</enum></property>
+         <property name="frameShadow"><enum>QFrame::Sunken</enum></property>
         </widget>
        </item>
        <item>
-        <widget class="QPushButton" name="stopButton">
-         <property name="font">
-          <font>
-           <pointsize>16</pointsize>
-          </font>
-         </property>
-         <property name="text">
-          <string>STOP</string>
-         </property>
+        <layout class="QHBoxLayout" name="statusIndicatorLayout">
+         <item>
+          <widget class="QLabel" name="lampStatusLabel">
+           <property name="font"><font><pointsize>11</pointsize><weight>75</weight><bold>true</bold></font></property>
+           <property name="text"><string>LAMPS: STANDBY</string></property>
+           <property name="alignment"><set>Qt::AlignCenter</set></property>
+           <property name="autoFillBackground"><bool>true</bool></property>
+           <property name="frameShape"><enum>QFrame::Box</enum></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLabel" name="shutterStatusLabel">
+           <property name="font"><font><pointsize>11</pointsize><weight>75</weight><bold>true</bold></font></property>
+           <property name="text"><string>SHUTTER: CLOSED</string></property>
+           <property name="alignment"><set>Qt::AlignCenter</set></property>
+           <property name="autoFillBackground"><bool>true</bool></property>
+           <property name="frameShape"><enum>QFrame::Box</enum></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLabel" name="qSwitchStatusLabel">
+           <property name="font"><font><pointsize>11</pointsize><weight>75</weight><bold>true</bold></font></property>
+           <property name="text"><string>Q-SWITCH: DISABLED</string></property>
+           <property name="alignment"><set>Qt::AlignCenter</set></property>
+           <property name="autoFillBackground"><bool>true</bool></property>
+           <property name="frameShape"><enum>QFrame::Box</enum></property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="overallStatusLayout">
+         <item>
+          <widget class="QLabel" name="overallStatusLabel">
+           <property name="font"><font><pointsize>13</pointsize><weight>75</weight><bold>true</bold></font></property>
+           <property name="text"><string>OVERALL: STANDBY</string></property>
+           <property name="alignment"><set>Qt::AlignCenter</set></property>
+           <property name="autoFillBackground"><bool>true</bool></property>
+           <property name="frameShape"><enum>QFrame::Box</enum></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QLabel" name="temperatureStatusLabel">
+           <property name="font"><font><pointsize>13</pointsize><weight>75</weight><bold>true</bold></font></property>
+           <property name="text"><string>TEMP: --.- C</string></property>
+           <property name="alignment"><set>Qt::AlignCenter</set></property>
+           <property name="autoFillBackground"><bool>true</bool></property>
+           <property name="frameShape"><enum>QFrame::Box</enum></property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <widget class="QFrame" name="separator2">
+         <property name="frameShape"><enum>QFrame::HLine</enum></property>
+         <property name="frameShadow"><enum>QFrame::Sunken</enum></property>
+        </widget>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="independentControlsLayout">
+         <item>
+          <widget class="QPushButton" name="lampToggleButton">
+           <property name="font"><font><pointsize>11</pointsize></font></property>
+           <property name="text"><string>ACTIVATE LAMPS</string></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="shutterToggleButton">
+           <property name="font"><font><pointsize>11</pointsize></font></property>
+           <property name="text"><string>OPEN SHUTTER</string></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="qSwitchToggleButton">
+           <property name="font"><font><pointsize>11</pointsize></font></property>
+           <property name="text"><string>ARM Q-SWITCH</string></property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="singlePulseLayout">
+         <item>
+          <widget class="QPushButton" name="singlePulseButton">
+           <property name="enabled"><bool>false</bool></property>
+           <property name="font"><font><pointsize>11</pointsize></font></property>
+           <property name="text"><string>SINGLE PULSE</string></property>
+          </widget>
+         </item>
+         <item>
+          <spacer name="singlePulseSpacer">
+           <property name="orientation"><enum>Qt::Horizontal</enum></property>
+           <property name="sizeHint" stdset="0"><size><width>40</width><height>20</height></size></property>
+          </spacer>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <widget class="QFrame" name="separator3">
+         <property name="frameShape"><enum>QFrame::HLine</enum></property>
+         <property name="frameShadow"><enum>QFrame::Sunken</enum></property>
+        </widget>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="compoundControlsLayout">
+         <item>
+          <widget class="QPushButton" name="warmupButton">
+           <property name="font"><font><pointsize>14</pointsize></font></property>
+           <property name="text"><string>WARMUP</string></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="startLasingButton">
+           <property name="font"><font><pointsize>14</pointsize></font></property>
+           <property name="text"><string>START LASING</string></property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="fullStopButton">
+           <property name="font"><font><pointsize>14</pointsize></font></property>
+           <property name="text"><string>FULL STOP</string></property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="keepWarmLayout">
+         <item>
+          <widget class="QCheckBox" name="keepWarmCheckBox">
+           <property name="text"><string>Keep Warm (auto-poll temperature)</string></property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <widget class="QFrame" name="separator4">
+         <property name="frameShape"><enum>QFrame::HLine</enum></property>
+         <property name="frameShadow"><enum>QFrame::Sunken</enum></property>
         </widget>
        </item>
        <item>

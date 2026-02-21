@@ -1,6 +1,7 @@
 #written by Alex Brinson (brinson@mit.edu, alexjbrinson@gmail.com) on behalf of EMA Lab
 import sys
 from PyQt5 import QtCore, QtGui, QtWidgets, uic
+from PyQt5.QtCore import QTimer
 import serial
 import time
 import numpy as np
@@ -43,6 +44,15 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
     self.terminalEnabled = False
     self.proposedEnergy = 7; self.proposedVoltage = 500; self.proposedFrequency = 0; self.fLampVoltage=0
 
+    #Warmup / keep-warm state
+    self.warmupActive = False
+    self.keepWarmActive = False
+    self.lastTemperature = 0.0
+    self.tempPollTimer = QTimer(self)
+    self.tempPollTimer.timeout.connect(self.pollTemperature)
+    self.TEMP_COLD = 37.0
+    self.TEMP_OPERATING = 39.0
+
    #Initializing GUI values
 
    #Checking for self.calibration file in local directory
@@ -75,6 +85,7 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
 
     self.frequencyDoubleSpinBox.setEnabled(not(self.flashLampMode));
     self.frequencyConfirmationButton.setEnabled(not(self.flashLampMode))
+    self.updateAllStatusIndicators()
 
     #Connecting signals to slots
     self.frequencyDoubleSpinBox.valueChanged.connect(self.setFrequency)
@@ -84,11 +95,23 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
     self.qSwitchRadioButton_2.clicked.connect(self.setQSwitchExternal)
     self.flashLampRadioButton_0.clicked.connect(self.setFlashLampInternal)
     self.flashLampRadioButton_1.clicked.connect(self.setFlashLampExternal)
-    self.lampActivationButton.clicked.connect(self.startLaser)
     self.flashLampVoltageLineEdit.returnPressed.connect(self.confirmVoltageSetting)
     self.frequencyConfirmationButton.clicked.connect(self.confirmFrequencySetting)
-    self.stopButton.clicked.connect(self.stopLaser)
     self.laserSaveButton.clicked.connect(self.saveLaserSettings)
+
+    #Independent controls
+    self.lampToggleButton.clicked.connect(self.toggleActiveStatus)
+    self.shutterToggleButton.clicked.connect(self.toggleShutterStatus)
+    self.qSwitchToggleButton.clicked.connect(self.toggleQSwitchStatus)
+    self.singlePulseButton.clicked.connect(self.singlePulse)
+
+    #Compound controls
+    self.warmupButton.clicked.connect(self.startWarmup)
+    self.startLasingButton.clicked.connect(self.startLaser)
+    self.fullStopButton.clicked.connect(self.stopLaser)
+
+    #Keep warm
+    self.keepWarmCheckBox.toggled.connect(self.toggleKeepWarm)
 
     self.toggleInputButton.clicked.connect(self.toggleTerminalInput)
     self.terminalInputLineEdit.textChanged.connect(self.updateTerminalCommand)
@@ -181,42 +204,37 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
 
   def toggleActiveStatus(self):
     self.activeStatus = 0 if self.activeStatus == 1 else 1
-    #self.lampActivationButton.setText("Lamp Firing  Activated  ") if self.activeStatus else self.lampActivationButton.setText("Lamp Firing Deactivated")
-    self.singlePulseButton.setEnabled(not(self.qSwitchStatus) and self.shutterStatus and self.activeStatus and (self.qSwitchMode==0))
-    self.qSwitchRadioButton_0.setEnabled(not(self.activeStatus)); self.qSwitchRadioButton_1.setEnabled(not(self.activeStatus)); self.qSwitchRadioButton_2.setEnabled(not(self.activeStatus));
-    self.flashLampRadioButton_0.setEnabled(not(self.activeStatus)); self.flashLampRadioButton_1.setEnabled(not(self.activeStatus))
     if self.activeStatus:
-       print(">a"); self.lampActivationButton.setText("Lamp Firing  Activated  ")
+       print(">a")
        self.terminalOutputTextBrowser.append("<p style='color: black'>"+'>a'+"</p>");
-
        if self.serialConnected:
         self.ser.flush(); self.ser.write(b'>a\n'); response = self.ser.read(140).decode('utf-8'); print("response:", response)
         self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
     else:
-      print(">s"); self.lampActivationButton.setText("Lamp Firing Deactivated")
+      print(">s")
       self.terminalOutputTextBrowser.append("<p style='color: black'>"+'>s'+"</p>");
       self.shutterStatus = 0
       self.qSwitchStatus = 0
       if self.serialConnected:
         self.ser.flush(); self.ser.write(b'>s\n'); response = self.ser.read(140).decode('utf-8'); print("response:", response)
         self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
+    self.updateAllStatusIndicators()
 
   def toggleShutterStatus(self):
     self.shutterStatus = 0 if self.shutterStatus == 1 else 1
-    self.singlePulseButton.setEnabled(not(self.qSwitchStatus) and self.shutterStatus and self.activeStatus and (self.qSwitchMode==0))
     if self.shutterStatus:
-      print(">r1"); #self.shutterButton.setText("Shutter  Open  ")
+      print(">r1")
       self.terminalOutputTextBrowser.append("<p style='color: black'>"+'>r1'+"</p>");
       if self.serialConnected:
         self.ser.flush(); self.ser.write(b'>r1\n'); response = self.ser.read(140).decode('utf-8'); print("response:", response)
         self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
     else:
-      print(">r0"); #self.shutterButton.setText("Shutter Closed")
+      print(">r0")
       self.terminalOutputTextBrowser.append("<p style='color: black'>"+'>r0'+"</p>");
       if self.serialConnected:
         self.ser.flush(); self.ser.write(b'>r0\n'); response = self.ser.read(140).decode('utf-8'); print("response:", response)
         self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
-    #self.qSwitchActivationButton.setEnabled(self.activeStatus and self.shutterStatus)
+    self.updateAllStatusIndicators()
 
   def toggleQSwitchStatus(self):
     if self.qSwitchStatus:
@@ -224,12 +242,12 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
       if self.serialConnected:
         self.ser.flush(); self.ser.write(b'>sq\n'); response = self.ser.read(140).decode('utf-8'); print("response:", response)
         self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
-
     else:
       self.qSwitchStatus = 1; print(">pq"); self.terminalOutputTextBrowser.append("<p style='color: black'>"+'>pq'+"</p>");
       if self.serialConnected and self.dangerMode:
         self.ser.flush(); self.ser.write(b'>pq\n'); response = self.ser.read(140).decode('utf-8'); print("response:", response)
         self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
+    self.updateAllStatusIndicators()
   
   def singlePulse(self):
     print(">oq"); self.terminalOutputTextBrowser.append("<p style='color: black'>"+'>oq'+"</p>");
@@ -239,10 +257,7 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
 
   def startLaser(self): #Single button to start lasing. Leaving lampfiring active with q-switch disabled could be damaging to laser.
     self.activeStatus = 1
-    #self.lampActivationButton.setText("Laser Activated ") if self.activeStatus else self.lampActivationButton.setText("START")
-    self.qSwitchRadioButton_0.setEnabled(not(self.activeStatus)); self.qSwitchRadioButton_1.setEnabled(not(self.activeStatus)); self.qSwitchRadioButton_2.setEnabled(not(self.activeStatus));
-    self.flashLampRadioButton_0.setEnabled(not(self.activeStatus)); self.flashLampRadioButton_1.setEnabled(not(self.activeStatus))
-    print(">a\n>r1\n>pq"); self.lampActivationButton.setText("Laser Activated")
+    print(">a\n>r1\n>pq")
     self.terminalOutputTextBrowser.append("<p style='color: black'>"+'>a\n>r1\n>pq'+"</p>");
     self.shutterStatus = 1; self.qSwitchStatus = 1
     if self.serialConnected:
@@ -252,26 +267,30 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
       self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>");
       self.ser.flush(); self.ser.write(b'>pq\n'); response = self.ser.read(140).decode('utf-8'); print("response:", response)
       self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>");
-    self.lampActivationButton.setEnabled(not(self.activeStatus)) 
+    if self.keepWarmActive:
+      self.keepWarmCheckBox.setChecked(False)
+    self.warmupActive = False
+    self.updateAllStatusIndicators()
 
   def stopLaser(self): #This does the same thing as toggleActiveStatus if active status == 1. But it's redundant for safety, in case gui and laser get de-synced somehow.
     self.activeStatus = 0
-    self.qSwitchRadioButton_0.setEnabled(not(self.activeStatus)); self.qSwitchRadioButton_1.setEnabled(not(self.activeStatus)); self.qSwitchRadioButton_2.setEnabled(not(self.activeStatus));
-    self.flashLampRadioButton_0.setEnabled(not(self.activeStatus)); self.flashLampRadioButton_1.setEnabled(not(self.activeStatus))
-    print(">s"); self.lampActivationButton.setText("START")
+    print(">s")
     self.terminalOutputTextBrowser.append("<p style='color: black'>"+'>s'+"</p>");
-    self.shutterStatus = 0; #self.shutterButton.setText("Shutter Closed")
-    self.qSwitchStatus = 0; #self.qSwitchActivationButton.setText("qSwitch Deactivated");
+    self.shutterStatus = 0
+    self.qSwitchStatus = 0
     if self.serialConnected:
       self.ser.flush(); self.ser.write(b'>s\n'); response = self.ser.read(140).decode('utf-8'); print("response:", response)
       self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>");
-    #self.qSwitchActivationButton.setEnabled(self.activeStatus and self.shutterStatus and not(self.terminalEnabled))
-    self.lampActivationButton.setEnabled(not(self.activeStatus)) 
+    self.warmupActive = False
+    if self.keepWarmActive:
+      self.keepWarmCheckBox.setChecked(False)
+    self.tempPollTimer.stop()
+    self.updateAllStatusIndicators()
 
   def toggleTerminalInput(self):
     if self.terminalEnabled:
       self.terminalEnabled=False;
-      self.stopLaser(); #self.lampActivationButton.setEnabled(True); #self.shutterButton.setEnabled(True)
+      self.stopLaser()
       self.update_fLampMode()
       self.update_qSwitchMode()
       self.update_fLampVoltage()
@@ -280,16 +299,21 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
       self.updateFreq()
     else:
       self.terminalEnabled=True;
-      #self.lampActivationButton.setEnabled(False)#self.shutterButton.setEnabled(False); self.qSwitchActivationButton.setEnabled(False); self.singlePulseButton.setEnabled(False);
     self.terminalInputLabel.setEnabled(self.terminalEnabled); self.terminalInputLineEdit.setEnabled(self.terminalEnabled)
     self.qSwitchRadioButton_0.setEnabled(not(self.terminalEnabled)); self.qSwitchRadioButton_1.setEnabled(not(self.terminalEnabled)); self.qSwitchRadioButton_2.setEnabled(not(self.terminalEnabled))
     self.flashLampRadioButton_0.setEnabled(not(self.terminalEnabled)); self.flashLampRadioButton_1.setEnabled(not(self.terminalEnabled))
     frequencyBoolean = not(self.terminalEnabled) and not(self.flashLampMode)
     self.frequencyDoubleSpinBox.setEnabled(frequencyBoolean); self.FrequencyLabel.setEnabled(frequencyBoolean); self.frequencyConfirmationButton.setEnabled(frequencyBoolean)
-    #self.flashLampEnergyLabel.setEnabled(not(self.terminalEnabled)); self.fLampEnergyConfirmationButton.setEnabled(not(self.terminalEnabled));
-    #self.flashLampEnergyHorizontalSlider.setEnabled(not(self.terminalEnabled)); self.flashLampEnergyDoubleSpinBox.setEnabled(not(self.terminalEnabled));
-    self.flashLampVoltageLabel.setEnabled(not(self.terminalEnabled)); #self.fLampVoltageConfirmationButton.setEnabled(not(self.terminalEnabled));
-    #self.flashLampVoltageHorizontalSlider.setEnabled(not(self.terminalEnabled)); self.flashLampVoltageSpinBox.setEnabled(not(self.terminalEnabled));
+    self.flashLampVoltageLabel.setEnabled(not(self.terminalEnabled))
+    #New controls
+    self.lampToggleButton.setEnabled(not(self.terminalEnabled))
+    self.shutterToggleButton.setEnabled(not(self.terminalEnabled))
+    self.qSwitchToggleButton.setEnabled(not(self.terminalEnabled))
+    self.singlePulseButton.setEnabled(not(self.terminalEnabled))
+    self.warmupButton.setEnabled(not(self.terminalEnabled))
+    self.startLasingButton.setEnabled(not(self.terminalEnabled))
+    self.fullStopButton.setEnabled(not(self.terminalEnabled))
+    self.keepWarmCheckBox.setEnabled(not(self.terminalEnabled))
 
   def fetchSerial(self):
     print(">sn"); self.terminalOutputTextBrowser.append("<p style='color: black'>"+'>sn'+"</p>");
@@ -318,12 +342,14 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
     self.terminalOutputTextBrowser.append('>cg')
     self.ser.flush();self.ser.write(b'>cg\n')
     response = self.ser.read(140).decode('utf-8'); temp=float(response.strip('\r\ntemp.CG d'))
+    self.lastTemperature = temp
     print("temperature = {T}C".format(T=temp))
     self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>");
     tiempo = time.strftime("%d %b %Y %H:%M:%S",time.localtime())
     print("time = {t}".format(t=tiempo))
     self.temperatureOutput.setText(str(temp)+" C")
     self.lastUpdateOutput.setText(str(tiempo))
+    self._updateTemperatureStatusColor()
 
   def update_fLampVoltage(self):
     self.terminalOutputTextBrowser.append('>v')
@@ -368,7 +394,150 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
     elif self.qSwitchMode==2: self.qSwitchRadioButton_2.setChecked(True)
     else: print("ERROR. self.qSwitchMode makes no sense");self.ser.flush();self.ser.write(b'>s\n'); self.ser.read(140).decode('utf-8');
 
+  def updateAllStatusIndicators(self):
+    #Lamp status
+    if self.activeStatus:
+      self.lampStatusLabel.setText("LAMPS: FIRING")
+      self._setLabelColor(self.lampStatusLabel, bg="#90EE90", fg="black")
+      self.lampToggleButton.setText("DEACTIVATE LAMPS")
+    else:
+      self.lampStatusLabel.setText("LAMPS: STANDBY")
+      self._setLabelColor(self.lampStatusLabel, bg="#D3D3D3", fg="black")
+      self.lampToggleButton.setText("ACTIVATE LAMPS")
+
+    #Shutter status
+    if self.shutterStatus:
+      self.shutterStatusLabel.setText("SHUTTER: OPEN")
+      self._setLabelColor(self.shutterStatusLabel, bg="#FFA500", fg="black")
+      self.shutterToggleButton.setText("CLOSE SHUTTER")
+    else:
+      self.shutterStatusLabel.setText("SHUTTER: CLOSED")
+      self._setLabelColor(self.shutterStatusLabel, bg="#D3D3D3", fg="black")
+      self.shutterToggleButton.setText("OPEN SHUTTER")
+
+    #Q-Switch status
+    if self.qSwitchStatus:
+      self.qSwitchStatusLabel.setText("Q-SWITCH: ARMED")
+      self._setLabelColor(self.qSwitchStatusLabel, bg="#FF6347", fg="white")
+      self.qSwitchToggleButton.setText("DISARM Q-SWITCH")
+    else:
+      self.qSwitchStatusLabel.setText("Q-SWITCH: DISABLED")
+      self._setLabelColor(self.qSwitchStatusLabel, bg="#D3D3D3", fg="black")
+      self.qSwitchToggleButton.setText("ARM Q-SWITCH")
+
+    #Overall status
+    if self.activeStatus and self.shutterStatus and self.qSwitchStatus:
+      self.overallStatusLabel.setText("OVERALL: LASING")
+      self._setLabelColor(self.overallStatusLabel, bg="#FF0000", fg="white")
+    elif self.activeStatus and not self.shutterStatus:
+      self.overallStatusLabel.setText("OVERALL: WARMING UP")
+      self._setLabelColor(self.overallStatusLabel, bg="#FFD700", fg="black")
+    elif self.activeStatus:
+      self.overallStatusLabel.setText("OVERALL: LAMPS ACTIVE")
+      self._setLabelColor(self.overallStatusLabel, bg="#90EE90", fg="black")
+    else:
+      self.overallStatusLabel.setText("OVERALL: STANDBY")
+      self._setLabelColor(self.overallStatusLabel, bg="#D3D3D3", fg="black")
+
+    #Temperature status
+    self._updateTemperatureStatusColor()
+
+    #Button enable/disable logic
+    self.shutterToggleButton.setEnabled(self.activeStatus)
+    self.qSwitchToggleButton.setEnabled(self.activeStatus and self.shutterStatus)
+    self.singlePulseButton.setEnabled(
+        self.activeStatus and self.shutterStatus
+        and not self.qSwitchStatus and (self.qSwitchMode == 0))
+
+    #Mode radio buttons only changeable in standby
+    for rb in [self.qSwitchRadioButton_0, self.qSwitchRadioButton_1,
+               self.qSwitchRadioButton_2, self.flashLampRadioButton_0,
+               self.flashLampRadioButton_1]:
+        rb.setEnabled(not self.activeStatus)
+
+    tiempo = time.strftime("%d %b %Y %H:%M:%S", time.localtime())
+    self.lastUpdateOutput.setText(str(tiempo))
+
+  def _setLabelColor(self, label, bg, fg):
+    label.setStyleSheet(
+        "background-color: %s; color: %s; padding: 4px; border: 1px solid gray;" % (bg, fg))
+
+  def _updateTemperatureStatusColor(self):
+    temp = self.lastTemperature
+    if temp < self.TEMP_COLD:
+      self.temperatureStatusLabel.setText("TEMP: %.1f C (COLD)" % temp)
+      self._setLabelColor(self.temperatureStatusLabel, bg="#87CEEB", fg="black")
+    elif temp < self.TEMP_OPERATING:
+      self.temperatureStatusLabel.setText("TEMP: %.1f C (WARMING)" % temp)
+      self._setLabelColor(self.temperatureStatusLabel, bg="#FFD700", fg="black")
+    else:
+      self.temperatureStatusLabel.setText("TEMP: %.1f C (OK)" % temp)
+      self._setLabelColor(self.temperatureStatusLabel, bg="#90EE90", fg="black")
+
+  def startWarmup(self):
+    if not self.serialConnected:
+      self.terminalOutputTextBrowser.append("<p style='color: red'>Cannot warmup: no serial connection</p>")
+      return
+    self.warmupActive = True
+    #Ensure Q-switch is disabled
+    if self.qSwitchStatus:
+      self.qSwitchStatus = 0
+      self.ser.flush(); self.ser.write(b'>sq\n'); self.ser.read(140).decode('utf-8')
+      self.terminalOutputTextBrowser.append('>sq')
+    #Ensure shutter is closed
+    if self.shutterStatus:
+      self.shutterStatus = 0
+      self.ser.flush(); self.ser.write(b'>r0\n'); self.ser.read(140).decode('utf-8')
+      self.terminalOutputTextBrowser.append('>r0')
+    #Activate lamps if not already active
+    if not self.activeStatus:
+      self.activeStatus = 1
+      self.ser.flush(); self.ser.write(b'>a\n')
+      response = self.ser.read(140).decode('utf-8')
+      self.terminalOutputTextBrowser.append('>a')
+      self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
+    #Start temperature polling (60 seconds, matching LabView)
+    self.tempPollTimer.start(60000)
+    self.updateTemp()
+    self.updateAllStatusIndicators()
+    self.terminalOutputTextBrowser.append(
+        "<p style='color: blue'>Warmup started. Lamps firing, shutter closed. Waiting for temp > 37C...</p>")
+
+  def toggleKeepWarm(self, checked):
+    self.keepWarmActive = checked
+    if checked:
+      if not self.activeStatus:
+        self.startWarmup()
+      else:
+        #Already active, ensure shutter closed and Q-switch off
+        if self.qSwitchStatus:
+          self.toggleQSwitchStatus()
+        if self.shutterStatus:
+          self.toggleShutterStatus()
+        self.tempPollTimer.start(60000)
+      self.terminalOutputTextBrowser.append(
+          "<p style='color: blue'>Keep-warm mode enabled. Temperature polled every 60 seconds.</p>")
+    else:
+      self.warmupActive = False
+      self.tempPollTimer.stop()
+      self.terminalOutputTextBrowser.append(
+          "<p style='color: blue'>Keep-warm mode disabled. Temperature polling stopped.</p>")
+
+  def pollTemperature(self):
+    if not self.serialConnected:
+      return
+    self.updateTemp()
+    if self.warmupActive and self.lastTemperature >= self.TEMP_COLD:
+      self.terminalOutputTextBrowser.append(
+          "<p style='color: green'>Temperature %.1fC >= %.1fC. Laser is warm enough to lase.</p>"
+          % (self.lastTemperature, self.TEMP_COLD))
+      if not self.keepWarmActive:
+        self.warmupActive = False
+        self.tempPollTimer.stop()
+    self.updateAllStatusIndicators()
+
   def safeExit(self):
+    self.tempPollTimer.stop()
     print(">s")
     if self.serialConnected:
       self.ser.flush(); self.ser.write(b'>s\n'); response = self.ser.read(140).decode('utf-8'); print("response:", response)
