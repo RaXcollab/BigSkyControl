@@ -1,0 +1,78 @@
+To use Labview control program						G Hall 	16 Nov 2018
+
+Head SN# 03020503
+Software version SPECTRA-SY 3.68
+query 'sn' returns s/number 089
+
+
+Ext trigger to pigtail BNC from laser P/S 9-pin plug: 5 V pulse, 100 us works fine.
+See VI History in control.vi for more documentation
+
+Power On: laser P/S
+Turn on this computer and run shortcut to Control.vi from desktop.
+
+On Control program front panel, select EXT or INT mode for flashlamp triggers,
+   (EXT is default) 
+
+The EXT lamp mode takes a single trigger for lamps, and generates the Q-Sw trigger internally 
+at the specified delay, default value 140 us. 
+Timing jitter will be about +/- 0.5 us relative to lamp trigger + nominal QS delay.
+Low rep rate is ok; up to 30 Hz no problem. 
+
+Start program
+Select 'Warmup Lamps' and wait for temperature tp come up to >37 C as lamps fire with shutter 
+off if trigger is applied.
+Normal operating temperature is 39 C.
+
+Default lamp voltage is 725, below lasing threshold, if warmup is too slow, make sure lamps are firing 
+with either INT lamp mode or EXT and applied trigger.
+Temp indicator will update every minute, or whenever "Start Warmup" is pressed.  Yellow background 
+color on temperature indicator shows low temp.  
+
+Verify safe laser beam path, and press "Start Q-Sw" to initiate lasing.
+Choose voltage with slider or numeric control; voltage will actually change only when you
+press the "Set Voltage" button, echoing the new voltage in the Response History and updating the 
+'Voltage Reported' indicator.
+
+On initial setup, voltage 825 gave about 10 mJ/pulse (100 mW at 10 Hz) and voltage 850 gave 20 mJ/pulse.
+Full power should give >125 mJ. 
+
+To pause lasing without shutting down program, use "Standby-Stop Lamps" button.  This will disable
+the Q-Switch, close the shutter and stop the lamps from firing.
+
+You may also pause laser by pressing Stop Q-Sw, which will leave the lamps running if the trigger is active.
+
+To restart after standby, you need to press 'Start Warmup' again to re-enable flashlamp firing, open
+shutter and enable Q-Sw.
+ 
+To shut down laser and control program, use big "Stop - Puts Laser in Standby" bar.
+Best not to use Labview execution menu bar stop icon to stop program.
+
+
+BigSkyLog2018.txt file is automatically updated with shot counter and timestamp whenever program 
+is closed with big "Stop" bar.  File is located in user Document directory\LabviewData.  You can 
+edit and add other comments if you wish, or archive and start new dated version periodically as 
+it gets longer.  Output green power would be a useful diagnostic to add from time to time.
+
+Power off the laser P/S after a short cool down period.
+
+Change notes for program are saved in vi.history for each vi.  [only LV2018 version has these comments]
+Questions?  gehall@bnl.gov 
+
+programming notes:
+serial port response from BigSky to communication is screwy: \r\n followed by the message (not message 
+terminated by \r\n).  For this reason, Nick has implemented the low level query as a 2 step loop:
+first send the command and get the response, which will be terminated before the correct response by
+the leading \r\n, leaving the answer in the output buffer.  Repeat the question and the initial \r\n
+characters will report the previous answer and leave another copy in the serial buffer to be read and
+discarded by the next command, or cleared with a VISA clear.  In either case, the response to second 
+command should be good.
+
+In principle, you could disable the termination character read mode, and just read the number of bytes reported
+in buffer.  I could make this work in some tests, but it seemed less reliable. In particular, I have noticed 
+that occasionally, but not always, the first 'a' command (start lamp warmup/enable lamp flash) 
+is ignored and shows no bytes available in buffer.  Issue it again and it seems fine, so even ignoring \r\n 
+read termination I would need to check for non-empty buffer and try again.
+
+So we stay with Nick's double-write and double-read solution, which seems to be stable and deals with the
+screwy pre-termination characters from the BigSky controller. 
