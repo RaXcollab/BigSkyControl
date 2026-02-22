@@ -44,6 +44,8 @@ class BigSkyZmqServer(QObject):
                      'qswitch_mode', 'warmup', 'start_lasing', 'stop'}
   # Parameter names for CHECK_VALUE / PUB-SUB monitors
   MONITOR_PARAMS = {'temperature', 'voltage', 'lamps', 'shutter', 'qswitch'}
+  # Superset: params that CHECK_VALUE can read back (monitors + readable writable state)
+  CHECKABLE_PARAMS = MONITOR_PARAMS | {'lamp_mode', 'qswitch_mode'}
 
   def __init__(self, rep_port=None, pub_port=None, parent=None):
     super().__init__(parent)
@@ -111,6 +113,8 @@ class BigSkyZmqServer(QObject):
     if param == 'lamps': return (ctrl.getActiveStatus(), "%d")
     if param == 'shutter': return (ctrl.getShutterStatus(), "%d")
     if param == 'qswitch': return (ctrl.getQSwitchStatus(), "%d")
+    if param == 'lamp_mode': return (ctrl.getLampMode(), "%d")
+    if param == 'qswitch_mode': return (ctrl.getQSwitchMode(), "%d")
     return (None, "unknown monitor param '%s'" % param)
 
   def _server_loop(self):
@@ -181,7 +185,7 @@ class BigSkyZmqServer(QObject):
       # CHECK_VALUE
       if action == "CHECK_VALUE":
         check_param = param if param else 'voltage'
-        if check_param not in self.MONITOR_PARAMS:
+        if check_param not in self.CHECKABLE_PARAMS:
           reply({"status": "ERROR", "message": "unknown monitor param '%s' in '%s'" % (check_param, connection)}); continue
         val, fmt = self._get_monitor_value(ctrl, check_param)
         self._log("ZMQ: CHECK_VALUE %s -> %s" % (connection, fmt % val))

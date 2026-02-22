@@ -565,6 +565,14 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
     """Return Q-switch status (0=disarmed, 1=armed). Thread-safe read."""
     with self._stateLock: return self.qSwitchStatus
 
+  def getLampMode(self):
+    """Return lamp trigger mode (0=internal, 1=external). Thread-safe read."""
+    with self._stateLock: return self.flashLampMode
+
+  def getQSwitchMode(self):
+    """Return Q-switch mode (0=internal, 1=burst, 2=external). Thread-safe read."""
+    with self._stateLock: return self.qSwitchMode
+
   def executeRemoteCommand(self, command, value, done_event=None):
     """Thread-safe remote command. Emits signal to Qt main thread.
     If done_event is provided, caller can wait on it for completion."""

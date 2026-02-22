@@ -152,7 +152,9 @@ This program is integrated into the BLACS experiment control system (labscript-s
 
 **Shared connection names** (per laser, e.g. `YAG_1`; must match both this server and the BLACS device):
 - Writable (PROGRAM_VALUE): `YAG_1_voltage`, `YAG_1_shutter`, `YAG_1_lamps`, `YAG_1_qswitch`, `YAG_1_lamp_mode`, `YAG_1_qswitch_mode`, `YAG_1_warmup`, `YAG_1_start_lasing`, `YAG_1_stop`
+- Checkable (CHECK_VALUE only, no PUB): `YAG_1_lamp_mode`, `YAG_1_qswitch_mode` — readable writable state, supported via `getLampMode()`/`getQSwitchMode()` getters
 - Monitors (CHECK_VALUE + PUB): `YAG_1_temperature_monitor`, `YAG_1_voltage_monitor`, `YAG_1_lamps_monitor`, `YAG_1_shutter_monitor`, `YAG_1_qswitch_monitor`
+- Command-only (PROGRAM_VALUE only, no CHECK_VALUE): `YAG_1_warmup`, `YAG_1_start_lasing`, `YAG_1_stop` — fire-and-forget, BLACS skips these in `check_remote_values`
 - Same pattern for `YAG_2_*`
 
 **Typical triggered mode**: Q-switch internal (0) + flashlamp external (1). BLACS sequence: stop → qswitch_mode=0 → lamp_mode=1 → voltage → lamps=1 → shutter=1 → qswitch=1.

@@ -111,6 +111,11 @@ This program is integrated into the BLACS experiment control system (labscript-s
 | `YAG_1_start_lasing` | any | Full start sequence (a→r1→pq) |
 | `YAG_1_stop` | any | Full stop (standby) |
 
+| Checkable (CHECK_VALUE only, no PUB) | Value | Description |
+|---------------------------------------|-------|-------------|
+| `YAG_1_lamp_mode` | 0/1 | Internal/external lamp trigger (read back via CHECK_VALUE) |
+| `YAG_1_qswitch_mode` | 0/1/2 | Internal/burst/external Q-switch (read back via CHECK_VALUE) |
+
 | Monitor (CHECK_VALUE + PUB) | Value | Description |
 |-----------------------------|-------|-------------|
 | `YAG_1_temperature_monitor` | float (C) | Coolant temperature |
