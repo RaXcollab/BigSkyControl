@@ -158,28 +158,28 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
 
   '''NOTE: These can only be changed while laser is in standby (>s). The GUI should now reproduce this behavior'''
   def setQSwitchInternal(self):
-    self.qSwitchMode = 0; print(">qsm0")
+    self.qSwitchMode = 0; self.qSwitchRadioButton_0.setChecked(True); print(">qsm0")
     if self.serialConnected:
       self.ser.flush(); self.ser.write(b'>qsm0\n'); response = self.ser.read(140).decode('utf-8'); print("response:", response)#; self.updateTemp()
       self.terminalOutputTextBrowser.append('>qsm0'); self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
   def setQSwitchBurst(self):
-    self.qSwitchMode = 1; print(">qsm1")
+    self.qSwitchMode = 1; self.qSwitchRadioButton_1.setChecked(True); print(">qsm1")
     if self.serialConnected:
       self.ser.flush(); self.ser.write(b'>qsm1\n'); response = self.ser.read(140).decode('utf-8'); print("response:", response)#; self.updateTemp()
       self.terminalOutputTextBrowser.append('>qsm1'); self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>");
   def setQSwitchExternal(self):
-    self.qSwitchMode = 2; print(">qsm2")
+    self.qSwitchMode = 2; self.qSwitchRadioButton_2.setChecked(True); print(">qsm2")
     if self.serialConnected:
       self.ser.flush(); self.ser.write(b'>qsm2\n'); response = self.ser.read(140).decode('utf-8'); print("response:", response)#; self.updateTemp()
       self.terminalOutputTextBrowser.append('>qsm2'); self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>");
   def setFlashLampInternal(self):
-    self.flashLampMode = 0; print(">lpm0")
+    self.flashLampMode = 0; self.flashLampRadioButton_0.setChecked(True); print(">lpm0")
     self.frequencyDoubleSpinBox.setEnabled(not(self.flashLampMode)); self.frequencyConfirmationButton.setEnabled(not(self.flashLampMode))
     if self.serialConnected:
       self.ser.flush(); self.ser.write(b'>lpm0\n'); response = self.ser.read(140).decode('utf-8'); print("response:", response)#; self.updateTemp()
       self.terminalOutputTextBrowser.append('>lpm0'); self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>");
   def setFlashLampExternal(self):
-    self.flashLampMode = 1; print(">lpm1")
+    self.flashLampMode = 1; self.flashLampRadioButton_1.setChecked(True); print(">lpm1")
     self.frequencyDoubleSpinBox.setEnabled(not(self.flashLampMode)); self.frequencyConfirmationButton.setEnabled(not(self.flashLampMode))
     if self.serialConnected:
       self.ser.flush(); self.ser.write(b'>lpm1\n'); response = self.ser.read(140).decode('utf-8'); print("response:", response)#; self.updateTemp()
