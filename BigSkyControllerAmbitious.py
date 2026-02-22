@@ -1,17 +1,21 @@
 #written by Alex Brinson (brinson@mit.edu, alexjbrinson@gmail.com) on behalf of EMA Lab
 import sys
 from PyQt5 import QtCore, QtGui, QtWidgets, uic
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import QTimer, pyqtSignal, pyqtSlot
 import serial
 import time
 import numpy as np
 import os
+import threading
  
 qtCreatorFile = "GuiBigSkyWidget.ui" # Enter file here.
  
 Ui_Widget, QtBaseClass = uic.loadUiType(qtCreatorFile)
  
 class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
+  #Signal for thread-safe remote command execution from ZMQ daemon thread
+  _remoteCommandRequested = pyqtSignal(str, object, object)  # (command, value, done_event)
+
   def __init__(self, cPort=-1, lString=''):
     super().__init__()
     self.setupUi(self)
@@ -43,6 +47,10 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
     self.activeStatus = 0; self.shutterStatus = 0; self.qSwitchStatus = 0
     self.terminalEnabled = False
     self.proposedEnergy = 7; self.proposedVoltage = 500; self.proposedFrequency = 0; self.fLampVoltage=0
+
+    #Thread-safe state lock for ZMQ accessor methods
+    self._stateLock = threading.Lock()
+    self._remoteCommandRequested.connect(self._handleRemoteCommand)
 
     #Warmup / keep-warm state
     self.warmupActive = False
@@ -191,7 +199,7 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
       if self.serialConnected:
         self.ser.flush(); self.ser.write(bytes(toWrite,"utf-8") );
         response = self.ser.read(140).decode('utf-8'); print("confirmVoltage response:",response)
-        self.fLampVoltage=int(response.strip('\r\nvoltage m V'))
+        with self._stateLock: self.fLampVoltage=int(response.strip('\r\nvoltage m V'))
         print("voltage = {V}V".format(V=self.fLampVoltage))
         self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>");
         self.flashLampVoltageLineEdit.setText(str(self.fLampVoltage))
@@ -203,7 +211,7 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
       self.flashLampVoltageLineEdit.setText(str(self.fLampVoltage))
 
   def toggleActiveStatus(self):
-    self.activeStatus = 0 if self.activeStatus == 1 else 1
+    with self._stateLock: self.activeStatus = 0 if self.activeStatus == 1 else 1
     if self.activeStatus:
        print(">a")
        self.terminalOutputTextBrowser.append("<p style='color: black'>"+'>a'+"</p>");
@@ -213,15 +221,14 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
     else:
       print(">s")
       self.terminalOutputTextBrowser.append("<p style='color: black'>"+'>s'+"</p>");
-      self.shutterStatus = 0
-      self.qSwitchStatus = 0
+      with self._stateLock: self.shutterStatus = 0; self.qSwitchStatus = 0
       if self.serialConnected:
         self.ser.flush(); self.ser.write(b'>s\n'); response = self.ser.read(140).decode('utf-8'); print("response:", response)
         self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
     self.updateAllStatusIndicators()
 
   def toggleShutterStatus(self):
-    self.shutterStatus = 0 if self.shutterStatus == 1 else 1
+    with self._stateLock: self.shutterStatus = 0 if self.shutterStatus == 1 else 1
     if self.shutterStatus:
       print(">r1")
       self.terminalOutputTextBrowser.append("<p style='color: black'>"+'>r1'+"</p>");
@@ -238,12 +245,14 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
 
   def toggleQSwitchStatus(self):
     if self.qSwitchStatus:
-      self.qSwitchStatus = 0; print(">sq"); self.terminalOutputTextBrowser.append("<p style='color: black'>"+'>sq'+"</p>");
+      with self._stateLock: self.qSwitchStatus = 0
+      print(">sq"); self.terminalOutputTextBrowser.append("<p style='color: black'>"+'>sq'+"</p>");
       if self.serialConnected:
         self.ser.flush(); self.ser.write(b'>sq\n'); response = self.ser.read(140).decode('utf-8'); print("response:", response)
         self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
     else:
-      self.qSwitchStatus = 1; print(">pq"); self.terminalOutputTextBrowser.append("<p style='color: black'>"+'>pq'+"</p>");
+      with self._stateLock: self.qSwitchStatus = 1
+      print(">pq"); self.terminalOutputTextBrowser.append("<p style='color: black'>"+'>pq'+"</p>");
       if self.serialConnected and self.dangerMode:
         self.ser.flush(); self.ser.write(b'>pq\n'); response = self.ser.read(140).decode('utf-8'); print("response:", response)
         self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
@@ -256,10 +265,9 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
       self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
 
   def startLaser(self): #Single button to start lasing. Leaving lampfiring active with q-switch disabled could be damaging to laser.
-    self.activeStatus = 1
+    with self._stateLock: self.activeStatus = 1; self.shutterStatus = 1; self.qSwitchStatus = 1
     print(">a\n>r1\n>pq")
     self.terminalOutputTextBrowser.append("<p style='color: black'>"+'>a\n>r1\n>pq'+"</p>");
-    self.shutterStatus = 1; self.qSwitchStatus = 1
     if self.serialConnected:
       self.ser.flush(); self.ser.write(b'>a\n'); response = self.ser.read(140).decode('utf-8'); print("response:", response)
       self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>");
@@ -273,11 +281,9 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
     self.updateAllStatusIndicators()
 
   def stopLaser(self): #This does the same thing as toggleActiveStatus if active status == 1. But it's redundant for safety, in case gui and laser get de-synced somehow.
-    self.activeStatus = 0
+    with self._stateLock: self.activeStatus = 0; self.shutterStatus = 0; self.qSwitchStatus = 0
     print(">s")
     self.terminalOutputTextBrowser.append("<p style='color: black'>"+'>s'+"</p>");
-    self.shutterStatus = 0
-    self.qSwitchStatus = 0
     if self.serialConnected:
       self.ser.flush(); self.ser.write(b'>s\n'); response = self.ser.read(140).decode('utf-8'); print("response:", response)
       self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>");
@@ -342,7 +348,7 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
     self.terminalOutputTextBrowser.append('>cg')
     self.ser.flush();self.ser.write(b'>cg\n')
     response = self.ser.read(140).decode('utf-8'); temp=float(response.strip('\r\ntemp.CG d'))
-    self.lastTemperature = temp
+    with self._stateLock: self.lastTemperature = temp
     print("temperature = {T}C".format(T=temp))
     self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>");
     tiempo = time.strftime("%d %b %Y %H:%M:%S",time.localtime())
@@ -354,7 +360,8 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
   def update_fLampVoltage(self):
     self.terminalOutputTextBrowser.append('>v')
     self.ser.flush();self.ser.write(b'>v\n')
-    response = self.ser.read(140).decode('utf-8'); self.fLampVoltage=int(response.strip('\r\nvoltage V'))
+    response = self.ser.read(140).decode('utf-8')
+    with self._stateLock: self.fLampVoltage=int(response.strip('\r\nvoltage V'))
     print("voltage = {V}V".format(V=self.fLampVoltage))
     self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>");
     #self.flashLampVoltageHorizontalSlider.setValue(self.fLampVoltage)
@@ -481,17 +488,17 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
     self.warmupActive = True
     #Ensure Q-switch is disabled
     if self.qSwitchStatus:
-      self.qSwitchStatus = 0
+      with self._stateLock: self.qSwitchStatus = 0
       self.ser.flush(); self.ser.write(b'>sq\n'); self.ser.read(140).decode('utf-8')
       self.terminalOutputTextBrowser.append('>sq')
     #Ensure shutter is closed
     if self.shutterStatus:
-      self.shutterStatus = 0
+      with self._stateLock: self.shutterStatus = 0
       self.ser.flush(); self.ser.write(b'>r0\n'); self.ser.read(140).decode('utf-8')
       self.terminalOutputTextBrowser.append('>r0')
     #Activate lamps if not already active
     if not self.activeStatus:
-      self.activeStatus = 1
+      with self._stateLock: self.activeStatus = 1
       self.ser.flush(); self.ser.write(b'>a\n')
       response = self.ser.read(140).decode('utf-8')
       self.terminalOutputTextBrowser.append('>a')
@@ -535,6 +542,117 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
         self.warmupActive = False
         self.tempPollTimer.stop()
     self.updateAllStatusIndicators()
+
+  # --- Thread-safe accessors for ZMQ server ---
+
+  def getVoltage(self):
+    """Return cached flashlamp voltage (int, volts). Thread-safe read."""
+    with self._stateLock: return self.fLampVoltage
+
+  def getTemperature(self):
+    """Return cached temperature (float, deg C). Thread-safe read."""
+    with self._stateLock: return self.lastTemperature
+
+  def getActiveStatus(self):
+    """Return lamp active status (0 or 1). Thread-safe read."""
+    with self._stateLock: return self.activeStatus
+
+  def getShutterStatus(self):
+    """Return shutter status (0=closed, 1=open). Thread-safe read."""
+    with self._stateLock: return self.shutterStatus
+
+  def getQSwitchStatus(self):
+    """Return Q-switch status (0=disarmed, 1=armed). Thread-safe read."""
+    with self._stateLock: return self.qSwitchStatus
+
+  def executeRemoteCommand(self, command, value, done_event=None):
+    """Thread-safe remote command. Emits signal to Qt main thread.
+    If done_event is provided, caller can wait on it for completion."""
+    self._remoteCommandRequested.emit(command, value, done_event)
+
+  @pyqtSlot(str, object, object)
+  def _handleRemoteCommand(self, command, value, done_event):
+    """Slot runs on main/GUI thread. Dispatches remote commands to appropriate handlers."""
+    try:
+      self.terminalOutputTextBrowser.append("<p style='color: blue'>[ZMQ] %s = %s</p>" % (command, str(value)))
+      if command == 'voltage':
+        self._remoteSetVoltage(int(round(float(value))))
+      elif command == 'shutter':
+        self._remoteSetShutter(int(round(float(value))))
+      elif command == 'lamps':
+        self._remoteSetLamps(int(round(float(value))))
+      elif command == 'qswitch':
+        self._remoteSetQSwitch(int(round(float(value))))
+      elif command == 'lamp_mode':
+        self._remoteSetLampMode(int(round(float(value))))
+      elif command == 'qswitch_mode':
+        self._remoteSetQSwitchMode(int(round(float(value))))
+      elif command == 'warmup':
+        if int(round(float(value))): self.startWarmup()
+        else:
+          self.warmupActive = False; self.tempPollTimer.stop()
+          self.terminalOutputTextBrowser.append("<p style='color: blue'>[ZMQ] Warmup stopped</p>")
+      elif command == 'start_lasing':
+        self.startLaser()
+      elif command == 'stop':
+        self.stopLaser()
+      else:
+        print("Unknown remote command: %s" % command)
+    finally:
+      if done_event is not None: done_event.set()
+
+  def _remoteSetVoltage(self, voltage_V):
+    if voltage_V < 500 or voltage_V > 1400:
+      print("Remote voltage %d out of range [500,1400]" % voltage_V); return
+    toWrite = ">vmo{vol}\n".format(vol=str(0)+str(voltage_V) if voltage_V<1000 else str(voltage_V))
+    if self.serialConnected:
+      self.ser.flush(); self.ser.write(bytes(toWrite,"utf-8"))
+      response = self.ser.read(140).decode('utf-8'); print("remote voltage response:", response)
+      with self._stateLock: self.fLampVoltage = int(response.strip('\r\nvoltage m V'))
+      self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
+      self.flashLampVoltageLineEdit.setText(str(self.fLampVoltage))
+      self.PowerEstimateValue.setText('%.2f'%np.interp(self.fLampVoltage,self.calibVolts,self.calibPower) + " W")
+      self.update_fLampEnergy(); self.updateTemp()
+    else:
+      with self._stateLock: self.fLampVoltage = voltage_V
+      self.flashLampVoltageLineEdit.setText(str(voltage_V))
+      self.PowerEstimateValue.setText('%.2f'%np.interp(voltage_V,self.calibVolts,self.calibPower) + " W")
+
+  def _remoteSetShutter(self, state):
+    """Set shutter: 1=open, 0=close. Respects safety: requires lamps active to open."""
+    if state and not self.activeStatus:
+      print("Remote shutter open rejected: lamps not active"); return
+    if state == self.shutterStatus: return  # already in desired state
+    self.toggleShutterStatus()
+
+  def _remoteSetLamps(self, state):
+    """Set lamps: 1=activate, 0=standby. Standby also clears shutter+qswitch."""
+    if state == self.activeStatus: return  # already in desired state
+    self.toggleActiveStatus()
+
+  def _remoteSetQSwitch(self, state):
+    """Set Q-switch: 1=arm, 0=disarm. Requires lamps active and shutter open to arm."""
+    if state and (not self.activeStatus or not self.shutterStatus):
+      print("Remote Q-switch arm rejected: requires lamps active + shutter open"); return
+    if state == self.qSwitchStatus: return  # already in desired state
+    self.toggleQSwitchStatus()
+
+  def _remoteSetLampMode(self, mode):
+    """Set lamp mode: 0=internal, 1=external. Requires standby."""
+    if self.activeStatus:
+      print("Remote lamp mode change rejected: laser must be in standby"); return
+    if mode == 0: self.setFlashLampInternal()
+    elif mode == 1: self.setFlashLampExternal()
+    else: print("Invalid lamp mode: %d" % mode)
+
+  def _remoteSetQSwitchMode(self, mode):
+    """Set Q-switch mode: 0=internal, 1=burst, 2=external. Requires standby."""
+    if self.activeStatus:
+      print("Remote Q-switch mode change rejected: laser must be in standby"); return
+    if mode == 0: self.setQSwitchInternal()
+    elif mode == 1: self.setQSwitchBurst()
+    elif mode == 2: self.setQSwitchExternal()
+    else: print("Invalid Q-switch mode: %d" % mode)
 
   def safeExit(self):
     self.tempPollTimer.stop()

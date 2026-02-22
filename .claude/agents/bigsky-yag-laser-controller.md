@@ -135,3 +135,32 @@ Before finalizing any code change:
 - **Voltage range**: 500-1400V
 - **External trigger**: Pin 4 (+), Pin 9 (-) on 9-pin D connector. +5V, 100us pulse. Up to 30 Hz.
 - **Q-switch delay**: Default 140us in external mode. Jitter ~0.5us.
+
+---
+
+## BLACS Integration
+
+This program is integrated into the BLACS experiment control system (labscript-suite at `C:\Users\radmo\labscript-suite`).
+
+**Read `C:\Users\radmo\labscript-suite\userlib\user_devices\BLACS_COMMUNICATION_CONTRACT.md` for the full communication protocol** — it defines the ZMQ JSON format (REQ-REP + PUB-SUB), connection naming conventions, and BLACS shot lifecycle.
+
+- **BLACS device code**: `C:\Users\radmo\labscript-suite\userlib\user_devices\BigSkyHub\`
+- **BLACS base device (RemoteControl)**: `C:\Users\radmo\labscript-suite\userlib\user_devices\RemoteControl\` — the generic REQ-REP client that BLACS uses to talk to this server.
+- **Connection table**: `C:\Users\radmo\labscript-suite\userlib\labscriptlib\Main_Experiment\connection_table.py`
+
+**ZMQ ports**: REP on 55540, PUB on 55541 (configurable in `BigSkyZmqServer` constructor).
+
+**Shared connection names** (per laser, e.g. `YAG_1`; must match both this server and the BLACS device):
+- Writable (PROGRAM_VALUE): `YAG_1_voltage`, `YAG_1_shutter`, `YAG_1_lamps`, `YAG_1_qswitch`, `YAG_1_lamp_mode`, `YAG_1_qswitch_mode`, `YAG_1_warmup`, `YAG_1_start_lasing`, `YAG_1_stop`
+- Monitors (CHECK_VALUE + PUB): `YAG_1_temperature_monitor`, `YAG_1_voltage_monitor`, `YAG_1_lamps_monitor`, `YAG_1_shutter_monitor`, `YAG_1_qswitch_monitor`
+- Same pattern for `YAG_2_*`
+
+**Typical triggered mode**: Q-switch internal (0) + flashlamp external (1). BLACS sequence: stop → qswitch_mode=0 → lamp_mode=1 → voltage → lamps=1 → shutter=1 → qswitch=1.
+
+**If modifying the ZMQ protocol** (connection names, message format, PUB-SUB topics), the BLACS device must also be updated. For BLACS architecture questions (state machines, Qt thread safety, device base classes), defer to the `labscript-amo-expert` agent in the labscript-suite workspace (`C:\Users\radmo\labscript-suite\.claude\agents\`).
+
+### ZMQ Server Architecture
+
+The `BigSkyZmqServer` class lives in `HugeSkyController.pyw`. It runs a daemon thread with REP+PUB sockets. Connection names are parsed as `{laser_base}_{param}[_monitor]` and dispatched to the correct `SingleLaserController` via `executeRemoteCommand(param, value, done_event)` signal/slot pattern for thread safety. All serial I/O happens on the Qt main thread; the ZMQ thread only reads cached state (via thread-safe getters) or emits signals.
+
+**Reference implementation**: `C:\Users\radmo\Desktop\GUIs\rastering\raster_controller.py:_zmq_loop()` — same protocol pattern.

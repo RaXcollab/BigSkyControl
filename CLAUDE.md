@@ -85,3 +85,40 @@ Mode changes (Q-switch mode, lamp mode) require the laser to be in standby first
 - The GUI can run without a laser connected (dummy mode) for UI testing
 - The `dangerMode` flag is set to `True` on connection and gates Q-switch/single-pulse operations
 - `QTimer` is used for temperature polling during warmup (60-second interval)
+
+## BLACS Integration
+
+This program is integrated into the BLACS experiment control system (labscript-suite at `C:\Users\radmo\labscript-suite`).
+
+**Read `C:\Users\radmo\labscript-suite\userlib\user_devices\BLACS_COMMUNICATION_CONTRACT.md` for the full communication protocol** — it defines the ZMQ JSON format (REQ-REP + PUB-SUB), connection naming conventions, and BLACS shot lifecycle.
+
+- **BLACS device code**: `C:\Users\radmo\labscript-suite\userlib\user_devices\BigSkyHub\`
+- **Connection table**: `C:\Users\radmo\labscript-suite\userlib\labscriptlib\Main_Experiment\connection_table.py`
+
+**ZMQ ports**: REP on 55540, PUB on 55541 (configurable in `BigSkyZmqServer` constructor).
+
+**Shared connection names** (per laser, e.g. `YAG_1`; must match both this server and the BLACS device):
+
+| Writable (PROGRAM_VALUE) | Value | Description |
+|--------------------------|-------|-------------|
+| `YAG_1_voltage` | 500-1400 (V) | Set flashlamp voltage |
+| `YAG_1_shutter` | 0/1 | Close/open shutter |
+| `YAG_1_lamps` | 0/1 | Standby/activate lamps |
+| `YAG_1_qswitch` | 0/1 | Disarm/arm Q-switch |
+| `YAG_1_lamp_mode` | 0/1 | Internal/external lamp trigger |
+| `YAG_1_qswitch_mode` | 0/1/2 | Internal/burst/external Q-switch |
+| `YAG_1_warmup` | 0/1 | Stop/start warmup |
+| `YAG_1_start_lasing` | any | Full start sequence (a→r1→pq) |
+| `YAG_1_stop` | any | Full stop (standby) |
+
+| Monitor (CHECK_VALUE + PUB) | Value | Description |
+|-----------------------------|-------|-------------|
+| `YAG_1_temperature_monitor` | float (C) | Coolant temperature |
+| `YAG_1_voltage_monitor` | int (V) | Current voltage |
+| `YAG_1_lamps_monitor` | 0/1 | Lamp status |
+| `YAG_1_shutter_monitor` | 0/1 | Shutter status |
+| `YAG_1_qswitch_monitor` | 0/1 | Q-switch status |
+
+Same pattern for `YAG_2_*`. Typical triggered mode: Q-switch internal (0) + flashlamp external (1).
+
+**If modifying the ZMQ protocol** (connection names, message format, PUB-SUB topics), the BLACS device must also be updated. For BLACS architecture questions (state machines, Qt thread safety, device base classes), defer to the `labscript-amo-expert` agent in the labscript-suite workspace (`C:\Users\radmo\labscript-suite\.claude\agents\`).
