@@ -97,12 +97,21 @@ Before finalizing any code change:
 - `Big Sky LabView/` — Reference LabView code from SteimleLab (Greg Hall, Nov 2018). Binary `.vi` files; developer notes can be extracted with Python `re.findall(rb'[\x20-\x7e]{8,}', data)`.
 
 ### Existing Coding Patterns
-- The code uses **compact single-line statements** (e.g., `self.ser.flush(); self.ser.write(b'>a\n'); response = self.ser.read(140).decode('utf-8')`). Follow this style.
-- Serial responses are parsed with `response.strip('\r\nKEYWORDS')` to extract numeric values.
+- All serial I/O routes through `_sendCommand(cmd_bytes)` which returns the response string or `None` on failure. Callers must check `if response is None: return`. Raw `self.ser.*` only appears in `_sendCommand()`, `_attemptReconnect()`, and `safeExit()`.
+- Serial responses are parsed with `response.strip('\r\nKEYWORDS')` to extract numeric values. All `int()`/`float()` casts are wrapped in `try/except ValueError`.
 - Terminal output uses color-coded HTML: `<p style='color: green'>` for responses, `black` for sent commands, `blue` for info messages, `red` for errors.
 - State is tracked with integer flags: `self.activeStatus`, `self.shutterStatus`, `self.qSwitchStatus` (0 or 1).
 - `updateAllStatusIndicators()` is the central method that updates all status labels and enforces button enable/disable logic. Call it after any state change.
 - `_setLabelColor(label, bg, fg)` applies stylesheet colors to status labels.
+
+### Disconnection & Reconnection Lifecycle
+- `_sendCommand()` catches `SerialException`, `OSError`, `UnicodeDecodeError` and calls `_handleDisconnect()` on failure.
+- `_handleDisconnect()` resets all state (activeStatus, shutterStatus, qSwitchStatus to 0), shows "DISCONNECTED" in dark red, starts `_reconnectTimer` (5s interval), emits `connectionStatusChanged.emit(False)`.
+- `_attemptReconnect()` tries `serial.Serial(comPort, 9600, timeout=1)` + `>cg` temperature query. On success calls `_handleReconnect()`.
+- `_handleReconnect()` sets `serialConnected = True`, re-queries all laser state (voltage, freq, modes, energy), restores GUI, emits `connectionStatusChanged.emit(True)`.
+- Hub `_onLaserConnectionChanged()` sets tab text to "(OFFLINE)" in red / restores on reconnect.
+- ZMQ server checks `ctrl.getSerialConnected()`: returns `{"status": "ERROR", "message": "laser disconnected"}` for CHECK_VALUE/PROGRAM_VALUE, skips PUB-SUB for offline lasers.
+- `HomeTab.rescanPorts()` discovers lasers powered on after hub startup.
 
 ### Serial Communication Details
 - **Baud**: 9600, **timeout**: 1 second, **read size**: 140 bytes

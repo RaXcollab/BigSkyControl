@@ -43,6 +43,20 @@ The `.ui` file and `.py` file are tightly coupled through `uic.loadUiType`. Widg
 - **Command format**: `>command\n` (e.g., `>a\n` to activate)
 - **Response quirk**: BigSky controller sends `\r\n` *before* the response message (not after). The existing code handles this by reading 140 bytes and stripping `\r\n`. See `SendCommand.vi` notes in the LabView reference for the double-write/double-read approach used historically.
 
+### Serial Error Handling Convention
+
+All serial I/O **must** route through `_sendCommand(cmd_bytes)` in `BigSkyControllerAmbitious.py`. This method:
+- Returns the response string on success, or `None` on failure
+- Catches `SerialException`, `OSError`, `UnicodeDecodeError`
+- Calls `_handleDisconnect()` on any serial error
+
+Raw `self.ser.*` calls should only appear in three places:
+1. `_sendCommand()` itself
+2. `_attemptReconnect()` (needs to test the port directly)
+3. `safeExit()` cleanup (wrapped in try/except)
+
+Every caller of `_sendCommand()` must check for `None` return and bail out (typically `if response is None: return`). Response parsing (`int()`, `float()` casts) should be wrapped in `try/except ValueError`.
+
 ### Serial Command Reference
 
 | Command | Description | Response format |
@@ -126,6 +140,15 @@ This program is integrated into the BLACS experiment control system (labscript-s
 
 Same pattern for `YAG_2_*`. Typical triggered mode: Q-switch internal (0) + flashlamp external (1).
 
-**Remote command GUI sync convention:** Every function that changes hardware state (e.g., `setFlashLampExternal`, `toggleShutterStatus`) must also update the corresponding GUI widget (radio button, checkbox, label). When called by user click, the widget is already correct. But when called via ZMQ remote command (`_handleRemoteCommand` dispatch), the widget won't update unless the function explicitly sets it. Failure to sync causes the GUI to show stale state.
+**Remote command GUI sync convention:** Every function that changes hardware state (e.g., `setFlashLampExternal`, `toggleShutterStatus`) must also update the corresponding GUI widget (radio button, checkbox, label). When called by user click, the widget is already correct. But when called via ZMQ remote command (`_handleRemoteCommand` dispatch), the widget won't update unless the function explicitly sets it. This also applies to disconnect/reconnect transitions — `_handleDisconnect()` and `_handleReconnect()` must update all GUI elements since no user click triggers the change. Failure to sync causes the GUI to show stale state.
+
+## Disconnection Resilience
+
+- **Detection**: Any `_sendCommand()` failure triggers `_handleDisconnect()`, which resets all state and shows "DISCONNECTED" in dark red
+- **Auto-reconnect**: `_reconnectTimer` fires every 5 seconds, validates with `>cg` temperature query, calls `_handleReconnect()` on success
+- **State restore**: `_handleReconnect()` re-queries voltage, frequency, modes, energy from the laser
+- **Signal**: `connectionStatusChanged(bool)` signal emitted on connect/disconnect — hub uses this to gray out / restore tab text
+- **ZMQ behavior**: Server returns `{"status": "ERROR", "message": "laser disconnected"}` for CHECK_VALUE/PROGRAM_VALUE when laser is offline; PUB-SUB skips broadcasting for disconnected lasers
+- **BLACS handling**: `BigSkyWorker` in labscript-suite gracefully skips "laser disconnected" errors with `logger.warning` (same pattern as "unknown connection")
 
 **If modifying the ZMQ protocol** (connection names, message format, PUB-SUB topics), the BLACS device must also be updated. For BLACS architecture questions (state machines, Qt thread safety, device base classes), defer to the `labscript-amo-expert` agent in the labscript-suite workspace (`C:\Users\radmo\labscript-suite\.claude\agents\`).

@@ -1,0 +1,169 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Lab Note: BigSky YAG Laser BLACS Integration via ZMQ</title>
+<style>
+  body { font-family: Calibri, Arial, sans-serif; max-width: 900px; margin: 20px auto; padding: 0 15px; color: #222; line-height: 1.5; }
+  h1 { color: #1a3a5c; border-bottom: 2px solid #1a3a5c; padding-bottom: 6px; }
+  h2 { color: #2a5a8c; margin-top: 28px; border-bottom: 1px solid #ccc; padding-bottom: 4px; }
+  h3 { color: #3a7abc; margin-top: 20px; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0 16px 0; }
+  th, td { border: 1px solid #bbb; padding: 6px 10px; text-align: left; }
+  th { background-color: #e8eef5; font-weight: bold; }
+  tr:nth-child(even) { background-color: #f7f9fc; }
+  code { background: #f0f2f5; padding: 1px 5px; border-radius: 3px; font-family: Consolas, 'Courier New', monospace; font-size: 0.95em; }
+  pre { background: #f4f5f8; padding: 12px; border-radius: 4px; overflow-x: auto; font-family: Consolas, 'Courier New', monospace; font-size: 0.9em; line-height: 1.4; }
+  .meta { color: #666; font-size: 0.9em; margin-bottom: 20px; }
+  .safety { background: #fff3cd; border-left: 4px solid #ffc107; padding: 10px 14px; margin: 12px 0; }
+  .info { background: #d1ecf1; border-left: 4px solid #17a2b8; padding: 10px 14px; margin: 12px 0; }
+  .success { background: #d4edda; border-left: 4px solid #28a745; padding: 10px 14px; margin: 12px 0; }
+  ul { margin: 6px 0; }
+  li { margin: 3px 0; }
+</style>
+</head>
+<body>
+
+<h1>BigSky YAG Laser &mdash; BLACS Integration via ZMQ</h1>
+<p class="meta">
+  <strong>Date:</strong> 2026-02-21 &nbsp;|&nbsp;
+  <strong>Author:</strong> Arian Jadbabaie (with Claude Code) &nbsp;|&nbsp;
+  <strong>Commit:</strong> <code>e6b3acf</code> &nbsp;|&nbsp;
+  <strong>Project:</strong> <code>BigSkyControl</code>
+</p>
+
+<h2>Summary</h2>
+<p>
+  Added a ZMQ server to the BigSky YAG laser control hub (<code>HugeSkyController.pyw</code>) enabling full remote control from BLACS (labscript-suite experiment control system). BLACS can now set voltage, open/close the shutter, activate/deactivate lamps, arm/disarm the Q-switch, change trigger modes, start warmup, stop the laser, and read status parameters (temperature, voltage, lamps, shutter, Q-switch) &mdash; all via the standard ZMQ REQ-REP + PUB-SUB protocol defined in the BLACS Communication Contract.
+</p>
+
+<h2>Architecture</h2>
+
+<h3>Thread Safety Model</h3>
+<p>
+  The ZMQ server runs in a <strong>daemon thread</strong> inside <code>HugeSkyController.pyw</code>. All serial I/O to the BigSky laser must happen on the Qt main thread. The cross-thread bridge works as follows:
+</p>
+<ol>
+  <li>ZMQ thread receives a <code>PROGRAM_VALUE</code> request from BLACS</li>
+  <li>ZMQ thread creates a <code>threading.Event</code> and calls <code>ctrl.executeRemoteCommand(param, value, done_event)</code></li>
+  <li><code>executeRemoteCommand</code> emits a <code>pyqtSignal</code> (auto-queued to the main thread)</li>
+  <li>Qt main thread slot <code>_handleRemoteCommand</code> dispatches to the appropriate handler, does serial I/O, then calls <code>done_event.set()</code></li>
+  <li>ZMQ thread wakes up and sends the REP response back to BLACS</li>
+</ol>
+<p>
+  Shared state (<code>fLampVoltage</code>, <code>lastTemperature</code>, <code>activeStatus</code>, <code>shutterStatus</code>, <code>qSwitchStatus</code>) is protected by a <code>threading.Lock</code> (<code>_stateLock</code>) and exposed via thread-safe getters used by the ZMQ thread for <code>CHECK_VALUE</code> and PUB-SUB broadcasts.
+</p>
+
+<h3>ZMQ Sockets</h3>
+<table>
+  <tr><th>Socket</th><th>Type</th><th>Port</th><th>Purpose</th></tr>
+  <tr><td>REP</td><td>Server (binds)</td><td>55540</td><td>Handles HELLO, PROGRAM_VALUE, CHECK_VALUE from BLACS</td></tr>
+  <tr><td>PUB</td><td>Publisher (binds)</td><td>55541</td><td>Broadcasts heartbeat (~1 Hz) and monitor values (~4 Hz)</td></tr>
+</table>
+
+<h2>Connection Names</h2>
+
+<h3>Writable Outputs (PROGRAM_VALUE)</h3>
+<p>Per laser (e.g., <code>YAG_1</code>). Same pattern for <code>YAG_2</code>.</p>
+<table>
+  <tr><th>Connection</th><th>Value</th><th>Serial Command</th><th>Notes</th></tr>
+  <tr><td><code>YAG_1_voltage</code></td><td>float (500&ndash;1400)</td><td><code>&gt;vmo####</code></td><td>Flashlamp voltage in volts</td></tr>
+  <tr><td><code>YAG_1_shutter</code></td><td>1=open, 0=close</td><td><code>&gt;r1</code> / <code>&gt;r0</code></td><td>Requires lamps active</td></tr>
+  <tr><td><code>YAG_1_lamps</code></td><td>1=activate, 0=standby</td><td><code>&gt;a</code> / <code>&gt;s</code></td><td>Standby clears shutter+qswitch</td></tr>
+  <tr><td><code>YAG_1_qswitch</code></td><td>1=arm, 0=disarm</td><td><code>&gt;pq</code> / <code>&gt;sq</code></td><td>Requires lamps+shutter active</td></tr>
+  <tr><td><code>YAG_1_lamp_mode</code></td><td>0=internal, 1=external</td><td><code>&gt;lpm0</code> / <code>&gt;lpm1</code></td><td>Requires standby first</td></tr>
+  <tr><td><code>YAG_1_qswitch_mode</code></td><td>0=int, 1=burst, 2=ext</td><td><code>&gt;qsm0/1/2</code></td><td>Requires standby first</td></tr>
+  <tr><td><code>YAG_1_warmup</code></td><td>1=start, 0=stop</td><td>Internal timer</td><td>Fires lamps, polls temp</td></tr>
+  <tr><td><code>YAG_1_start_lasing</code></td><td>any</td><td><code>&gt;a</code> &rarr; <code>&gt;r1</code> &rarr; <code>&gt;pq</code></td><td>Full activation sequence</td></tr>
+  <tr><td><code>YAG_1_stop</code></td><td>any</td><td><code>&gt;s</code></td><td>Full standby</td></tr>
+</table>
+
+<h3>Read-Only Monitors (CHECK_VALUE + PUB-SUB)</h3>
+<table>
+  <tr><th>Connection</th><th>Value</th><th>PUB-SUB Topic</th><th>Source</th></tr>
+  <tr><td><code>YAG_1_temperature_monitor</code></td><td>float (&deg;C)</td><td><code>YAG_1_temperature_monitor &lt;float&gt;</code></td><td><code>&gt;cg</code></td></tr>
+  <tr><td><code>YAG_1_voltage_monitor</code></td><td>int (V)</td><td><code>YAG_1_voltage_monitor &lt;int&gt;</code></td><td><code>&gt;v</code></td></tr>
+  <tr><td><code>YAG_1_lamps_monitor</code></td><td>0 or 1</td><td><code>YAG_1_lamps_monitor &lt;0|1&gt;</code></td><td>Software state</td></tr>
+  <tr><td><code>YAG_1_shutter_monitor</code></td><td>0 or 1</td><td><code>YAG_1_shutter_monitor &lt;0|1&gt;</code></td><td>Software state</td></tr>
+  <tr><td><code>YAG_1_qswitch_monitor</code></td><td>0 or 1</td><td><code>YAG_1_qswitch_monitor &lt;0|1&gt;</code></td><td>Software state</td></tr>
+</table>
+
+<h2>Typical Triggered Mode Workflow</h2>
+<div class="info">
+  <strong>Standard externally-triggered configuration:</strong> Q-switch mode = internal (0), Flashlamp mode = external (1).
+  The external trigger (5V, 100&mu;s pulse on Pin 4/Pin 9) fires the flashlamps; the Q-switch fires internally with each lamp pulse.
+</div>
+<p>Typical BLACS <code>transition_to_buffered</code> sequence:</p>
+<ol>
+  <li><code>YAG_1_stop</code> = 1 &mdash; ensure standby (mode changes require standby)</li>
+  <li><code>YAG_1_qswitch_mode</code> = 0 &mdash; internal Q-switch</li>
+  <li><code>YAG_1_lamp_mode</code> = 1 &mdash; external flashlamp trigger</li>
+  <li><code>YAG_1_voltage</code> = (desired V) &mdash; set flashlamp voltage</li>
+  <li><code>YAG_1_lamps</code> = 1 &mdash; activate lamps</li>
+  <li><code>YAG_1_shutter</code> = 1 &mdash; open shutter</li>
+  <li><code>YAG_1_qswitch</code> = 1 &mdash; arm Q-switch</li>
+  <li>Laser is now ready to fire on external trigger pulses</li>
+</ol>
+
+<h2>Safety Rules (Enforced by ZMQ Handlers)</h2>
+<div class="safety">
+  <ul>
+    <li><code>shutter=1</code> requires lamps active &rarr; returns ERROR if lamps not active</li>
+    <li><code>qswitch=1</code> requires lamps AND shutter active &rarr; returns ERROR if not</li>
+    <li><code>lamp_mode</code> / <code>qswitch_mode</code> require standby (lamps off) &rarr; returns ERROR if active</li>
+    <li><code>lamps=0</code> (standby) also clears shutter and Q-switch state</li>
+    <li>Voltage range validated: 500&ndash;1400V &rarr; returns ERROR if out of range</li>
+  </ul>
+</div>
+
+<h2>Files Modified</h2>
+<table>
+  <tr><th>File</th><th>Changes</th></tr>
+  <tr>
+    <td><code>BigSkyControllerAmbitious.py</code></td>
+    <td>
+      Added generic remote command dispatch via <code>_remoteCommandRequested</code> signal (replaces voltage-only signal).
+      Added <code>executeRemoteCommand()</code> + <code>_handleRemoteCommand()</code> with 9 command handlers.
+      Added 5 thread-safe getters. Added <code>_stateLock</code> protection on all state flag writes.
+    </td>
+  </tr>
+  <tr>
+    <td><code>HugeSkyController.pyw</code></td>
+    <td>
+      Added <code>BigSkyZmqServer</code> class (~200 lines): daemon thread, REP+PUB sockets, connection name parser,
+      full PROGRAM_VALUE dispatch, CHECK_VALUE for all monitors, PUB-SUB broadcast loop, heartbeat.
+      Hub creates/starts/stops server automatically. Purple log messages on Home tab.
+    </td>
+  </tr>
+  <tr>
+    <td><code>.claude/agents/bigsky-yag-laser-controller.md</code></td>
+    <td>Added BLACS integration section with connection names, ZMQ architecture, reference implementations.</td>
+  </tr>
+  <tr>
+    <td><code>CLAUDE.md</code></td>
+    <td>Added BLACS integration documentation.</td>
+  </tr>
+</table>
+
+<h2>Testing</h2>
+<div class="success">
+  All tests passed in dummy mode (no physical laser connected).
+</div>
+<ul>
+  <li><strong>HELLO</strong>: Server responds with <code>{"status": "SUCCESS"}</code></li>
+  <li><strong>CHECK_VALUE</strong>: All 5 monitors return correct values (<code>temperature_monitor</code>, <code>voltage_monitor</code>, <code>lamps_monitor</code>, <code>shutter_monitor</code>, <code>qswitch_monitor</code>)</li>
+  <li><strong>PROGRAM_VALUE</strong>: Voltage setting, lamp activation, shutter open, and stop all execute correctly</li>
+  <li><strong>Error handling</strong>: Unknown connection names return <code>{"status": "ERROR"}</code> with descriptive messages</li>
+  <li><strong>PUB-SUB</strong>: All monitor topics broadcast at ~4 Hz, heartbeat at ~1 Hz</li>
+</ul>
+
+<h2>Next Steps</h2>
+<ol>
+  <li><strong>BLACS Device (BigSkyHub)</strong>: Create the labscript-side device files in <code>userlib/user_devices/BigSkyHub/</code> that subclass <code>RemoteControl</code> with correct connection names, ports, and channel definitions</li>
+  <li><strong>Connection Table</strong>: Add <code>BigSkyHub</code> entries to <code>connection_table.py</code></li>
+  <li><strong>Hardware Test</strong>: Verify full round-trip with a physical BigSky laser connected</li>
+  <li><strong>Serial Number Mapping</strong>: Populate <code>LASER_SN_TO_CONNECTION</code> dict once laser serial numbers are confirmed</li>
+</ol>
+
+</body>
+</html>
