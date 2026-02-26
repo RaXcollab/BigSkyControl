@@ -88,7 +88,7 @@ From the LabView VI developer notes:
 ## How to Run
 ```
 conda activate guis
-cd c:\Users\radmo\Desktop\GUIs\BigSkyControl
+cd c:\Users\radmo\labscript-suite\GUIs\BigSkyControl
 python BigSkyControllerAmbitious.py       # standalone single-laser test
 python HugeSkyController.pyw              # multi-laser hub
 ```

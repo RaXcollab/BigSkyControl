@@ -612,6 +612,13 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
   def _remoteSetVoltage(self, voltage_V):
     if voltage_V < 500 or voltage_V > 1400:
       print("Remote voltage %d out of range [500,1400]" % voltage_V); return
+    # Skip if already at target (within ±1V for int rounding)
+    with self._stateLock:
+      current = self.fLampVoltage
+    if abs(current - voltage_V) <= 1:
+      self.terminalOutputTextBrowser.append(
+          "<p style='color: gray'>[ZMQ] voltage already at %dV, skipping</p>" % current)
+      return
     toWrite = ">vmo{vol}\n".format(vol=str(0)+str(voltage_V) if voltage_V<1000 else str(voltage_V))
     if self.serialConnected:
       self.ser.flush(); self.ser.write(bytes(toWrite,"utf-8"))
