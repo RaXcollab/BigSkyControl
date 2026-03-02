@@ -89,6 +89,8 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
       self.update_fLampEnergy()
       self.lastUpdateOutput.setText(str(tiempo))#
       self.updateFreq()
+      # Always-on temperature polling (60s interval, safe no-op if serial disconnects)
+      self.tempPollTimer.start(60000)
     else: self.label.setText("Laser not found. This is a dummy GUI\n"+self.labelString)
 
     self.frequencyDoubleSpinBox.setEnabled(not(self.flashLampMode));
@@ -115,11 +117,12 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
 
     #Compound controls
     self.warmupButton.clicked.connect(self.startWarmup)
+    self.startLasingButton.setText("Arm External")
     self.startLasingButton.clicked.connect(self.startLaser)
     self.fullStopButton.clicked.connect(self.stopLaser)
 
-    #Keep warm
-    self.keepWarmCheckBox.toggled.connect(self.toggleKeepWarm)
+    #Keep warm — now managed by BLACS Keep Warm feature; checkbox hidden
+    self.keepWarmCheckBox.hide()
 
     self.toggleInputButton.clicked.connect(self.toggleTerminalInput)
     self.terminalInputLineEdit.textChanged.connect(self.updateTerminalCommand)
@@ -264,21 +267,43 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
       self.ser.flush(); self.ser.write(b'>oq\n'); response = self.ser.read(140).decode('utf-8'); print("response:", response)
       self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
 
-  def startLaser(self): #Single button to start lasing. Leaving lampfiring active with q-switch disabled could be damaging to laser.
-    with self._stateLock: self.activeStatus = 1; self.shutterStatus = 1; self.qSwitchStatus = 1
-    print(">a\n>r1\n>pq")
-    self.terminalOutputTextBrowser.append("<p style='color: black'>"+'>a\n>r1\n>pq'+"</p>");
-    if self.serialConnected:
-      self.ser.flush(); self.ser.write(b'>a\n'); response = self.ser.read(140).decode('utf-8'); print("response:", response)
-      self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>");
-      self.ser.flush(); self.ser.write(b'>r1\n'); response = self.ser.read(140).decode('utf-8'); print("response:", response)
-      self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>");
-      self.ser.flush(); self.ser.write(b'>pq\n'); response = self.ser.read(140).decode('utf-8'); print("response:", response)
-      self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>");
+  def startLaser(self):
+    """Arm for external-trigger lasing: ensure external modes, then activate all."""
+    if not self.serialConnected:
+      self.terminalOutputTextBrowser.append("<p style='color: red'>Cannot arm: no serial connection</p>")
+      return
+    #Go to standby if active (required for mode switches)
+    if self.activeStatus:
+      with self._stateLock: self.activeStatus = 0; self.shutterStatus = 0; self.qSwitchStatus = 0
+      self.ser.flush(); self.ser.write(b'>s\n'); self.ser.read(140).decode('utf-8')
+      self.terminalOutputTextBrowser.append('>s (standby for mode switch)')
+    #Ensure external lamp mode
+    if self.flashLampMode != 1:
+      self.setFlashLampExternal()
+    #Ensure external Q-switch mode
+    if self.qSwitchMode != 2:
+      self.setQSwitchExternal()
+    #Activate lamps
+    with self._stateLock: self.activeStatus = 1
+    self.ser.flush(); self.ser.write(b'>a\n'); response = self.ser.read(140).decode('utf-8')
+    self.terminalOutputTextBrowser.append('>a')
+    self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
+    #Open shutter
+    with self._stateLock: self.shutterStatus = 1
+    self.ser.flush(); self.ser.write(b'>r1\n'); response = self.ser.read(140).decode('utf-8')
+    self.terminalOutputTextBrowser.append('>r1')
+    self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
+    #Arm Q-switch
+    with self._stateLock: self.qSwitchStatus = 1
+    self.ser.flush(); self.ser.write(b'>pq\n'); response = self.ser.read(140).decode('utf-8')
+    self.terminalOutputTextBrowser.append('>pq')
+    self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
     if self.keepWarmActive:
       self.keepWarmCheckBox.setChecked(False)
     self.warmupActive = False
     self.updateAllStatusIndicators()
+    self.terminalOutputTextBrowser.append(
+        "<p style='color: blue'>Armed for external trigger (lamp+QS external, shutter open, QS armed).</p>")
 
   def stopLaser(self): #This does the same thing as toggleActiveStatus if active status == 1. But it's redundant for safety, in case gui and laser get de-synced somehow.
     with self._stateLock: self.activeStatus = 0; self.shutterStatus = 0; self.qSwitchStatus = 0
@@ -288,9 +313,6 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
       self.ser.flush(); self.ser.write(b'>s\n'); response = self.ser.read(140).decode('utf-8'); print("response:", response)
       self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>");
     self.warmupActive = False
-    if self.keepWarmActive:
-      self.keepWarmCheckBox.setChecked(False)
-    self.tempPollTimer.stop()
     self.updateAllStatusIndicators()
 
   def toggleTerminalInput(self):
@@ -496,7 +518,14 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
       with self._stateLock: self.shutterStatus = 0
       self.ser.flush(); self.ser.write(b'>r0\n'); self.ser.read(140).decode('utf-8')
       self.terminalOutputTextBrowser.append('>r0')
-    #Activate lamps if not already active
+    #Switch to internal trigger if needed (requires standby)
+    if self.flashLampMode != 0:
+      if self.activeStatus:
+        with self._stateLock: self.activeStatus = 0; self.shutterStatus = 0; self.qSwitchStatus = 0
+        self.ser.flush(); self.ser.write(b'>s\n'); self.ser.read(140).decode('utf-8')
+        self.terminalOutputTextBrowser.append('>s (standby for mode switch)')
+      self.setFlashLampInternal()
+    #Activate lamps if not already active (internal trigger fires immediately)
     if not self.activeStatus:
       with self._stateLock: self.activeStatus = 1
       self.ser.flush(); self.ser.write(b'>a\n')
@@ -508,27 +537,26 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
     self.updateTemp()
     self.updateAllStatusIndicators()
     self.terminalOutputTextBrowser.append(
-        "<p style='color: blue'>Warmup started. Lamps firing, shutter closed. Waiting for temp > 37C...</p>")
+        "<p style='color: blue'>Warmup started (internal trigger). Lamps firing, shutter closed.</p>")
 
   def toggleKeepWarm(self, checked):
+    """Legacy method — Keep Warm is now managed by BLACS.
+    Kept for backward compatibility if checkbox is re-enabled."""
     self.keepWarmActive = checked
     if checked:
       if not self.activeStatus:
         self.startWarmup()
       else:
-        #Already active, ensure shutter closed and Q-switch off
         if self.qSwitchStatus:
           self.toggleQSwitchStatus()
         if self.shutterStatus:
           self.toggleShutterStatus()
-        self.tempPollTimer.start(60000)
       self.terminalOutputTextBrowser.append(
-          "<p style='color: blue'>Keep-warm mode enabled. Temperature polled every 60 seconds.</p>")
+          "<p style='color: blue'>Keep-warm mode enabled.</p>")
     else:
       self.warmupActive = False
-      self.tempPollTimer.stop()
       self.terminalOutputTextBrowser.append(
-          "<p style='color: blue'>Keep-warm mode disabled. Temperature polling stopped.</p>")
+          "<p style='color: blue'>Keep-warm mode disabled.</p>")
 
   def pollTemperature(self):
     if not self.serialConnected:
@@ -538,9 +566,7 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
       self.terminalOutputTextBrowser.append(
           "<p style='color: green'>Temperature %.1fC >= %.1fC. Laser is warm enough to lase.</p>"
           % (self.lastTemperature, self.TEMP_COLD))
-      if not self.keepWarmActive:
-        self.warmupActive = False
-        self.tempPollTimer.stop()
+      self.warmupActive = False
     self.updateAllStatusIndicators()
 
   # --- Thread-safe accessors for ZMQ server ---
@@ -598,7 +624,7 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
       elif command == 'warmup':
         if int(round(float(value))): self.startWarmup()
         else:
-          self.warmupActive = False; self.tempPollTimer.stop()
+          self.warmupActive = False
           self.terminalOutputTextBrowser.append("<p style='color: blue'>[ZMQ] Warmup stopped</p>")
       elif command == 'start_lasing':
         self.startLaser()
