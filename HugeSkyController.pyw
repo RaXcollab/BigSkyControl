@@ -146,6 +146,8 @@ class BigSkyZmqServer(QObject):
 
       # All monitors at ~4 Hz (every cycle, since loop is ~250ms)
       for conn_name, ctrl in list(self._lasers.items()):
+        if not ctrl.isConnected():
+          continue  # don't broadcast stale values for disconnected lasers
         for param in self.MONITOR_PARAMS:
           try:
             val, fmt = self._get_monitor_value(ctrl, param)
@@ -187,6 +189,10 @@ class BigSkyZmqServer(QObject):
       if base is None or base not in self._lasers:
         reply({"status": "ERROR", "message": "unknown connection '%s'" % connection}); continue
       ctrl = self._lasers[base]
+
+      # Early disconnect check — applies to both CHECK_VALUE and PROGRAM_VALUE
+      if not ctrl.isConnected():
+        reply({"status": "ERROR", "message": "laser disconnected"}); continue
 
       # CHECK_VALUE
       if action == "CHECK_VALUE":
@@ -415,8 +421,30 @@ class MyTableWidget(QWidget):
     sn = self.homeTab.serialNumbers[i] if i < len(self.homeTab.serialNumbers) else str(i)
     connName = self._assignConnectionName(sn)
     ctrl._zmqConnectionName = connName  # stash on controller for unregister lookup
+    ctrl._tabLabel = labelString  # store original label for disconnect/reconnect styling
     self.parent.zmqServer.registerLaser(connName, ctrl)
     self.homeTab.text.append("ZMQ: laser registered as '%s'" % connName)
+
+    # Connect disconnect/reconnect signal to tab styling
+    ctrl.connectionStatusChanged.connect(
+        lambda connected, cn=connName: self._onConnectionChanged(cn, connected))
+
+  def _onConnectionChanged(self, connName, connected):
+    """Update tab text when a laser connects/disconnects."""
+    for idx in range(1, self.tabs.count()):  # skip Home tab at 0
+      widget = self.tabs.widget(idx)
+      cn = getattr(widget, '_zmqConnectionName', None)
+      if cn == connName:
+        label = getattr(widget, '_tabLabel', connName)
+        if connected:
+          self.tabs.setTabText(idx, label)
+          self.homeTab.text.append(
+              "<p style='color: green'>%s reconnected</p>" % connName)
+        else:
+          self.tabs.setTabText(idx, "%s (DISCONNECTED)" % label)
+          self.homeTab.text.append(
+              "<p style='color: red'>%s serial disconnected</p>" % connName)
+        break
 
   def closeTab(self,i):
     widget = self.tabs.widget(i)
