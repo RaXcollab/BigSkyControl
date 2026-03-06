@@ -41,7 +41,8 @@ class BigSkyZmqServer(QObject):
 
   # Valid parameter names for PROGRAM_VALUE commands
   WRITABLE_PARAMS = {'voltage', 'shutter', 'lamps', 'qswitch', 'lamp_mode',
-                     'qswitch_mode', 'warmup', 'start_lasing', 'stop'}
+                     'qswitch_mode', 'warmup', 'start_lasing', 'stop',
+                     'keep_warm'}
   # Parameter names for CHECK_VALUE / PUB-SUB monitors
   MONITOR_PARAMS = {'temperature', 'voltage', 'lamps', 'shutter', 'qswitch'}
   # Superset: params that CHECK_VALUE can read back (monitors + readable writable state)

@@ -55,6 +55,7 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
     #Warmup / keep-warm state
     self.warmupActive = False
     self.keepWarmActive = False
+    self._warmupTriggered = False  # hysteresis flag for Auto Keep Warm
     self.lastTemperature = 0.0
     self.tempPollTimer = QTimer(self)
     self.tempPollTimer.timeout.connect(self.pollTemperature)
@@ -121,8 +122,8 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
     self.startLasingButton.clicked.connect(self.startLaser)
     self.fullStopButton.clicked.connect(self.stopLaser)
 
-    #Keep warm — now managed by BLACS Keep Warm feature; checkbox hidden
-    self.keepWarmCheckBox.hide()
+    #Keep warm — auto-poll temperature and enter warmup if cold
+    self.keepWarmCheckBox.toggled.connect(self.toggleKeepWarm)
 
     self.toggleInputButton.clicked.connect(self.toggleTerminalInput)
     self.terminalInputLineEdit.textChanged.connect(self.updateTerminalCommand)
@@ -298,8 +299,6 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
     self.ser.flush(); self.ser.write(b'>pq\n'); response = self.ser.read(140).decode('utf-8')
     self.terminalOutputTextBrowser.append('>pq')
     self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
-    if self.keepWarmActive:
-      self.keepWarmCheckBox.setChecked(False)
     self.warmupActive = False
     self.updateAllStatusIndicators()
     self.terminalOutputTextBrowser.append(
@@ -553,23 +552,26 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
         "<p style='color: blue'>Warmup started (internal trigger). Lamps firing, shutter closed.</p>")
 
   def toggleKeepWarm(self, checked):
-    """Legacy method — Keep Warm is now managed by BLACS.
-    Kept for backward compatibility if checkbox is re-enabled."""
+    """Toggle Auto Keep Warm: poll temperature and auto-enter warmup if cold.
+
+    Uses hysteresis to prevent oscillation:
+    - Triggers warmup when temp drops below TEMP_COLD (37°C)
+    - Resets trigger when temp rises to TEMP_OPERATING (39°C)
+    Works standalone (no BLACS needed) and can be synced from BLACS via ZMQ.
+    """
     self.keepWarmActive = checked
     if checked:
-      if not self.activeStatus:
-        self.startWarmup()
-      else:
-        if self.qSwitchStatus:
-          self.toggleQSwitchStatus()
-        if self.shutterStatus:
-          self.toggleShutterStatus()
+      self._warmupTriggered = False
       self.terminalOutputTextBrowser.append(
-          "<p style='color: blue'>Keep-warm mode enabled.</p>")
+          "<p style='color: blue'>Auto Keep Warm enabled — will enter warmup if temp &lt; %.0f°C.</p>"
+          % self.TEMP_COLD)
+      # Check temperature immediately
+      self._evaluateKeepWarm()
     else:
+      self._warmupTriggered = False
       self.warmupActive = False
       self.terminalOutputTextBrowser.append(
-          "<p style='color: blue'>Keep-warm mode disabled.</p>")
+          "<p style='color: blue'>Auto Keep Warm disabled.</p>")
 
   def pollTemperature(self):
     if not self.serialConnected:
@@ -580,7 +582,31 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
           "<p style='color: green'>Temperature %.1fC >= %.1fC. Laser is warm enough to lase.</p>"
           % (self.lastTemperature, self.TEMP_COLD))
       self.warmupActive = False
+    # Auto Keep Warm: check if we need to enter warmup
+    self._evaluateKeepWarm()
     self.updateAllStatusIndicators()
+
+  def _evaluateKeepWarm(self):
+    """Check if Auto Keep Warm should trigger warmup.
+
+    Uses hysteresis to prevent oscillation:
+    - Triggers warmup when temp drops below TEMP_COLD (37°C)
+    - Resets trigger when temp rises to TEMP_OPERATING (39°C)
+    Matches the BLACS tab's _evaluate_keep_warm hysteresis logic.
+    """
+    if not self.keepWarmActive:
+      return
+    if not self.serialConnected:
+      return
+    temp = self.lastTemperature
+    if temp < self.TEMP_COLD and not self._warmupTriggered:
+      self._warmupTriggered = True
+      self.terminalOutputTextBrowser.append(
+          "<p style='color: blue'>Auto Keep Warm: cold (%.1f°C), entering warmup.</p>" % temp)
+      self.startWarmup()
+    elif temp >= self.TEMP_OPERATING:
+      if self._warmupTriggered:
+        self._warmupTriggered = False
 
   # --- Thread-safe accessors for ZMQ server ---
 
@@ -643,6 +669,10 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
         self.startLaser()
       elif command == 'stop':
         self.stopLaser()
+      elif command == 'keep_warm':
+        checked = bool(int(round(float(value))))
+        if checked != self.keepWarmActive:
+          self.keepWarmCheckBox.setChecked(checked)
       else:
         print("Unknown remote command: %s" % command)
     finally:
