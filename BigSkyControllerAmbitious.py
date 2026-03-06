@@ -280,9 +280,9 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
     #Ensure external lamp mode
     if self.flashLampMode != 1:
       self.setFlashLampExternal()
-    #Ensure external Q-switch mode
-    if self.qSwitchMode != 2:
-      self.setQSwitchExternal()
+    #Safety: ensure Q-switch stays internal (always qsm0 in our setup)
+    if self.qSwitchMode != 0:
+      self.setQSwitchInternal()
     #Activate lamps
     with self._stateLock: self.activeStatus = 1
     self.ser.flush(); self.ser.write(b'>a\n'); response = self.ser.read(140).decode('utf-8')
@@ -303,7 +303,7 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
     self.warmupActive = False
     self.updateAllStatusIndicators()
     self.terminalOutputTextBrowser.append(
-        "<p style='color: blue'>Armed for external trigger (lamp+QS external, shutter open, QS armed).</p>")
+        "<p style='color: blue'>Armed for external trigger (lamp external, QS internal, shutter open, QS armed).</p>")
 
   def stopLaser(self): #This does the same thing as toggleActiveStatus if active status == 1. But it's redundant for safety, in case gui and laser get de-synced somehow.
     with self._stateLock: self.activeStatus = 0; self.shutterStatus = 0; self.qSwitchStatus = 0
@@ -367,17 +367,30 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
     self.terminalInputLineEdit.setText(self.terminalLineCurrently)
 
   def updateTemp(self):
-    self.terminalOutputTextBrowser.append('>cg')
-    self.ser.flush();self.ser.write(b'>cg\n')
-    response = self.ser.read(140).decode('utf-8'); temp=float(response.strip('\r\ntemp.CG d'))
-    with self._stateLock: self.lastTemperature = temp
-    print("temperature = {T}C".format(T=temp))
-    self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>");
-    tiempo = time.strftime("%d %b %Y %H:%M:%S",time.localtime())
-    print("time = {t}".format(t=tiempo))
-    self.temperatureOutput.setText(str(temp)+" C")
-    self.lastUpdateOutput.setText(str(tiempo))
-    self._updateTemperatureStatusColor()
+    if not self.serialConnected:
+      return
+    try:
+      self.terminalOutputTextBrowser.append('>cg')
+      self.ser.flush(); self.ser.write(b'>cg\n')
+      response = self.ser.read(140).decode('utf-8')
+      temp = float(response.strip('\r\ntemp.CG d'))
+      with self._stateLock: self.lastTemperature = temp
+      print("temperature = {T}C".format(T=temp))
+      self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
+      tiempo = time.strftime("%d %b %Y %H:%M:%S", time.localtime())
+      print("time = {t}".format(t=tiempo))
+      self.temperatureOutput.setText(str(temp)+" C")
+      self.lastUpdateOutput.setText(str(tiempo))
+      self._updateTemperatureStatusColor()
+    except (serial.SerialException, OSError) as e:
+      print("updateTemp: serial error: %s" % e)
+      self.terminalOutputTextBrowser.append(
+          "<p style='color: red'>Temperature read failed: %s. Serial disconnected.</p>" % e)
+      self.serialConnected = False
+    except (ValueError, UnicodeDecodeError) as e:
+      print("updateTemp: parse error: %s" % e)
+      self.terminalOutputTextBrowser.append(
+          "<p style='color: orange'>Temperature parse error: %s</p>" % e)
 
   def update_fLampVoltage(self):
     self.terminalOutputTextBrowser.append('>v')

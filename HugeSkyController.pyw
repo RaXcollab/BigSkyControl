@@ -146,9 +146,14 @@ class BigSkyZmqServer(QObject):
       # All monitors at ~4 Hz (every cycle, since loop is ~250ms)
       for conn_name, ctrl in list(self._lasers.items()):
         for param in self.MONITOR_PARAMS:
-          val, fmt = self._get_monitor_value(ctrl, param)
-          if val is not None:
-            publish("%s_%s_monitor" % (conn_name, param), fmt % val)
+          try:
+            val, fmt = self._get_monitor_value(ctrl, param)
+            if val is not None:
+              publish("%s_%s_monitor" % (conn_name, param), fmt % val)
+          except Exception as e:
+            # Controller may be mid-destruction during tab close
+            self._log("ZMQ: PUB error for %s_%s: %s" % (conn_name, param, e))
+            break  # Skip remaining params for this laser
 
       # Heartbeat at ~1 Hz (every 4th cycle at 250ms = 1s)
       if pub_counter % 4 == 0:
@@ -187,7 +192,12 @@ class BigSkyZmqServer(QObject):
         check_param = param if param else 'voltage'
         if check_param not in self.CHECKABLE_PARAMS:
           reply({"status": "ERROR", "message": "unknown monitor param '%s' in '%s'" % (check_param, connection)}); continue
-        val, fmt = self._get_monitor_value(ctrl, check_param)
+        try:
+          val, fmt = self._get_monitor_value(ctrl, check_param)
+        except Exception as e:
+          reply({"status": "ERROR", "message": "laser disconnected"}); continue
+        if val is None:
+          reply({"status": "ERROR", "message": "unknown monitor param '%s' in '%s'" % (check_param, connection)}); continue
         self._log("ZMQ: CHECK_VALUE %s -> %s" % (connection, fmt % val))
         reply({"status": "SUCCESS", "connection": connection, "value": val}); continue
 
@@ -261,8 +271,6 @@ class BigSkyHub(QMainWindow):
 class HomeTab(QWidget):
   def __init__(self,parent):
     super().__init__()
-    possibleDevices=[comport.device for comport in serial.tools.list_ports.comports()]
-    print(possibleDevices)
     try:
         with open('laserNames.pkl','rb') as file: self.laserNames=pickle.load(file); file.close()
     except: self.laserNames={}
@@ -272,44 +280,88 @@ class HomeTab(QWidget):
     self.serialNumbers=[]
     self.labelLineEdits=[]
     self.processes={}
-    if len(possibleDevices)==0: #pass. I'm only not passing for development testing purposes
-      print('ayo')
-      self.devices+=['dummy device']; sn=420
-      self.serialNumbers+=[str(sn)]
-      self.buttons+=[QPushButton('launch %s ; SN%d'%(self.devices[-1],sn))]
-      self.labelLineEdits+=[QLineEdit('')]
-      self.layout.addWidget(self.buttons[-1], len(self.buttons)-1, 0)
-      self.layout.addWidget(self.labelLineEdits[-1], len(self.buttons)-1, 1)
-    else:
-      for dev in possibleDevices:
-        try:
-          print('trying com port %s'%dev)
-          ser = serial.Serial(dev,9600,timeout=1)
-        except:
-          print("nope not this one")
-          #self.buttons[i].setEnabled(False)
-          sn=-1
-        else:
-          print(" maybe this one?")
-          ser.flush(); ser.write(b'>sn\n')
-          response = ser.read(140).decode('utf-8'); print("response:", response)
-          if 'number'in response:
-            print("yeah this one."); ser.close()
-            sn=response.strip('s// number\r\n')
-            self.serialNumbers+=[sn]
-            self.devices+=[dev]
-            self.buttons+=[QPushButton('launch %s ; SN %s'%(dev, sn))]
-            if sn in self.laserNames.keys(): self.labelLineEdits+=[QLineEdit(self.laserNames[sn])]
-            else: self.labelLineEdits+=[QLineEdit('')]
-            self.layout.addWidget(self.buttons[-1], len(self.buttons)-1, 0)
-            self.layout.addWidget(self.labelLineEdits[-1], len(self.buttons)-1, 1)
+    self._parentWidget = parent  # store ref for connecting new buttons
+
+    # Initial scan
+    self._scanPorts()
+
+    # Bottom row: text browser, refresh button, save button
+    bottomRow = len(self.buttons)
     self.text = QTextBrowser()
-    self.layout.addWidget(self.text, len(self.buttons),0)
-    self.saveButton=QPushButton('Save Labels')
-    self.layout.addWidget(self.saveButton, len(self.buttons),1)
+    self.layout.addWidget(self.text, bottomRow, 0)
+    btnLayout = QVBoxLayout()
+    self.refreshButton = QPushButton('Refresh Connections')
+    self.refreshButton.setStyleSheet("background-color: #E3F2FD; font-weight: bold;")
+    self.refreshButton.pressed.connect(self.refreshConnections)
+    btnLayout.addWidget(self.refreshButton)
+    self.saveButton = QPushButton('Save Labels')
     self.saveButton.pressed.connect(self.saveLabels)
-    #self.saveButton.pressed.connect(lambda: self.text.append('bruh...'))
+    btnLayout.addWidget(self.saveButton)
+    btnContainer = QWidget()
+    btnContainer.setLayout(btnLayout)
+    self.layout.addWidget(btnContainer, bottomRow, 1)
     self.setLayout(self.layout)
+
+  def _scanPorts(self):
+    """Scan COM ports for BigSky lasers. Adds new ones to the button list."""
+    possibleDevices = [comport.device for comport in serial.tools.list_ports.comports()]
+    print(possibleDevices)
+    for dev in possibleDevices:
+      if dev in self.devices:
+        continue  # already known
+      try:
+        print('trying com port %s' % dev)
+        ser = serial.Serial(dev, 9600, timeout=1)
+      except:
+        print("nope not this one")
+        continue
+      try:
+        ser.flush(); ser.write(b'>sn\n')
+        response = ser.read(140).decode('utf-8'); print("response:", response)
+        if 'number' in response:
+          print("yeah this one."); ser.close()
+          sn = response.strip('s// number\r\n')
+          self.serialNumbers += [sn]
+          self.devices += [dev]
+          btn = QPushButton('launch %s ; SN %s' % (dev, sn))
+          self.buttons += [btn]
+          if sn in self.laserNames.keys():
+            self.labelLineEdits += [QLineEdit(self.laserNames[sn])]
+          else:
+            self.labelLineEdits += [QLineEdit('')]
+          self.layout.addWidget(self.buttons[-1], len(self.buttons)-1, 0)
+          self.layout.addWidget(self.labelLineEdits[-1], len(self.buttons)-1, 1)
+        else:
+          ser.close()
+      except Exception as e:
+        print("scan error for %s: %s" % (dev, e))
+        try: ser.close()
+        except: pass
+
+  def refreshConnections(self):
+    """Re-scan COM ports for newly powered-on BigSky lasers."""
+    prevCount = len(self.buttons)
+    self._scanPorts()
+    newCount = len(self.buttons)
+    found = newCount - prevCount
+
+    # Connect new buttons to createTab (via parent MyTableWidget)
+    if hasattr(self._parentWidget, 'parent') and hasattr(self._parentWidget, 'tabs'):
+      tableWidget = self._parentWidget  # MyTableWidget
+      for i in range(prevCount, newCount):
+        self.buttons[i].pressed.connect(lambda i=i: tableWidget.createTab(i))
+
+    # Move bottom row widgets down to make room
+    bottomRow = len(self.buttons)
+    self.layout.addWidget(self.text, bottomRow, 0)
+    btnContainer = self.layout.itemAtPosition(prevCount if prevCount > 0 else 0, 1)
+    if btnContainer:
+      self.layout.addWidget(btnContainer.widget(), bottomRow, 1)
+
+    if found > 0:
+      self.text.append("<p style='color: green'>Found %d new laser(s).</p>" % found)
+    else:
+      self.text.append("<p style='color: gray'>No new lasers found. Ensure lasers are powered on and connected via USB.</p>")
   def saveLabels(self):
     for i in range(len(self.buttons)):
       self.laserNames[self.serialNumbers[i]]=self.labelLineEdits[i].text()
@@ -383,8 +435,8 @@ class MyTableWidget(QWidget):
         self.homeTab.buttons[j].setEnabled(True); break
 
   def safeExit(self):
-    for i in range(1, self.tabs.count()):
-      print('safely closing tab %d'%i)
+    for i in range(self.tabs.count() - 1, 0, -1):
+      print('safely closing tab %d' % i)
       self.closeTab(i)
 
 if __name__ == '__main__':
