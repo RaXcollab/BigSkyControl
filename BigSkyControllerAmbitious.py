@@ -16,6 +16,7 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
   #Signal for thread-safe remote command execution from ZMQ daemon thread
   _remoteCommandRequested = pyqtSignal(str, object, object)  # (command, value, done_event)
   connectionStatusChanged = pyqtSignal(bool)  # emitted on disconnect/reconnect
+  _blacsHelloReceived = pyqtSignal()  # emitted by ZMQ server on HELLO from BLACS
 
   def __init__(self, cPort=-1, lString=''):
     super().__init__()
@@ -70,6 +71,11 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
 
     #Latched energy readback — set when voltage changes, consumed by next temp poll
     self._energyReadbackPending = False
+
+    #BLACS connection tracking — suppress GUI-side keep-warm when BLACS is in control
+    self._blacsConnected = False
+    self._lastBlacsContact = 0
+    self._blacsHelloReceived.connect(self._onBlacsHello)
 
    #Initializing GUI values
 
@@ -176,6 +182,7 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
       return  # already disconnected
     self.serialConnected = False
     self._consecutiveErrors = 0
+    self._blacsConnected = False
 
     # Reset all cached hardware state
     with self._stateLock:
@@ -259,6 +266,12 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
   def isConnected(self):
     """Return serial connection status. Thread-safe (GIL-atomic bool read)."""
     return self.serialConnected
+
+  @pyqtSlot()
+  def _onBlacsHello(self):
+    """Received HELLO from BLACS via ZMQ — mark BLACS as connected."""
+    self._blacsConnected = True
+    self._lastBlacsContact = time.time()
 
   # --- Laser commands ---
 
@@ -787,6 +800,9 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
       return
     if not self.serialConnected:
       return
+    # Defer to BLACS when it's actively controlling (auto-expires after 5 min)
+    if self._blacsConnected and (time.time() - self._lastBlacsContact) < 300:
+      return
     temp = self.lastTemperature
     if temp < self.TEMP_COLD and not self._warmupTriggered:
       self._warmupTriggered = True
@@ -836,6 +852,8 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
   def _handleRemoteCommand(self, command, value, done_event):
     """Slot runs on main/GUI thread. Dispatches remote commands to appropriate handlers."""
     try:
+      self._blacsConnected = True
+      self._lastBlacsContact = time.time()
       self.terminalOutputTextBrowser.append("<p style='color: blue'>[ZMQ] %s = %s</p>" % (command, str(value)))
       if command == 'voltage':
         self._remoteSetVoltage(int(round(float(value))))

@@ -182,6 +182,9 @@ class BigSkyZmqServer(QObject):
       # HELLO
       if action == "HELLO":
         self._log("ZMQ: HELLO received")
+        # Notify all lasers that BLACS is connected (thread-safe signal → Qt main thread)
+        for ctrl in list(self._lasers.values()):
+          ctrl._blacsHelloReceived.emit()
         reply({"status": "SUCCESS"}); continue
 
       # Parse connection name into (base, param, is_monitor)
