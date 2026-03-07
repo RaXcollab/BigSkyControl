@@ -68,6 +68,9 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
     self._reconnectTimer = QTimer(self)
     self._reconnectTimer.timeout.connect(self._attemptReconnect)
 
+    #Latched energy readback — set when voltage changes, consumed by next temp poll
+    self._energyReadbackPending = False
+
    #Initializing GUI values
 
    #Checking for self.calibration file in local directory
@@ -349,8 +352,7 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
         print("voltage = {V}V".format(V=self.fLampVoltage))
         self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>");
         self.flashLampVoltageLineEdit.setText(str(self.fLampVoltage))
-        self.update_fLampEnergy()
-        self.updateTemp()
+        self._energyReadbackPending = True  # deferred to next temp poll
       else: self.fLampVoltage=self.proposedVoltage
       self.PowerEstimateValue.setText('%.2f'%np.interp(self.fLampVoltage,self.calibVolts,self.calibPower) + " W")
     else:
@@ -760,10 +762,14 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
     if not self.serialConnected:
       return
     self.updateTemp()
-    if self.warmupActive and self.lastTemperature >= self.TEMP_COLD:
+    # Latched energy readback after voltage change
+    if self._energyReadbackPending:
+      self._energyReadbackPending = False
+      self.update_fLampEnergy()
+    if self.warmupActive and self.lastTemperature >= self.TEMP_OPERATING:
       self.terminalOutputTextBrowser.append(
           "<p style='color: green'>Temperature %.1fC >= %.1fC. Laser is warm enough to lase.</p>"
-          % (self.lastTemperature, self.TEMP_COLD))
+          % (self.lastTemperature, self.TEMP_OPERATING))
       self.warmupActive = False
     # Auto Keep Warm: check if we need to enter warmup
     self._evaluateKeepWarm()
@@ -882,7 +888,7 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
       self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
       self.flashLampVoltageLineEdit.setText(str(self.fLampVoltage))
       self.PowerEstimateValue.setText('%.2f'%np.interp(self.fLampVoltage,self.calibVolts,self.calibPower) + " W")
-      self.update_fLampEnergy(); self.updateTemp()
+      self._energyReadbackPending = True  # deferred to next temp poll
     else:
       with self._stateLock: self.fLampVoltage = voltage_V
       self.flashLampVoltageLineEdit.setText(str(voltage_V))
