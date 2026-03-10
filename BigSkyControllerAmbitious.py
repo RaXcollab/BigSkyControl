@@ -313,35 +313,40 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
 
   '''NOTE: These can only be changed while laser is in standby (>s). The GUI should now reproduce this behavior'''
   def setQSwitchInternal(self):
-    self.qSwitchMode = 0; self.qSwitchRadioButton_0.setChecked(True); print(">qsm0")
+    print(">qsm0")
     response = self._sendCommand(b'>qsm0\n')
     if response is not None:
+      self.qSwitchMode = 0; self.qSwitchRadioButton_0.setChecked(True)
       print("response:", response)
       self.terminalOutputTextBrowser.append('>qsm0'); self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
   def setQSwitchBurst(self):
-    self.qSwitchMode = 1; self.qSwitchRadioButton_1.setChecked(True); print(">qsm1")
+    print(">qsm1")
     response = self._sendCommand(b'>qsm1\n')
     if response is not None:
+      self.qSwitchMode = 1; self.qSwitchRadioButton_1.setChecked(True)
       print("response:", response)
       self.terminalOutputTextBrowser.append('>qsm1'); self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>");
   def setQSwitchExternal(self):
-    self.qSwitchMode = 2; self.qSwitchRadioButton_2.setChecked(True); print(">qsm2")
+    print(">qsm2")
     response = self._sendCommand(b'>qsm2\n')
     if response is not None:
+      self.qSwitchMode = 2; self.qSwitchRadioButton_2.setChecked(True)
       print("response:", response)
       self.terminalOutputTextBrowser.append('>qsm2'); self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>");
   def setFlashLampInternal(self):
-    self.flashLampMode = 0; self.flashLampRadioButton_0.setChecked(True); print(">lpm0")
-    self.frequencyDoubleSpinBox.setEnabled(not(self.flashLampMode)); self.frequencyConfirmationButton.setEnabled(not(self.flashLampMode))
+    print(">lpm0")
     response = self._sendCommand(b'>lpm0\n')
     if response is not None:
+      self.flashLampMode = 0; self.flashLampRadioButton_0.setChecked(True)
+      self.frequencyDoubleSpinBox.setEnabled(True); self.frequencyConfirmationButton.setEnabled(True)
       print("response:", response)
       self.terminalOutputTextBrowser.append('>lpm0'); self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>");
   def setFlashLampExternal(self):
-    self.flashLampMode = 1; self.flashLampRadioButton_1.setChecked(True); print(">lpm1")
-    self.frequencyDoubleSpinBox.setEnabled(not(self.flashLampMode)); self.frequencyConfirmationButton.setEnabled(not(self.flashLampMode))
+    print(">lpm1")
     response = self._sendCommand(b'>lpm1\n')
     if response is not None:
+      self.flashLampMode = 1; self.flashLampRadioButton_1.setChecked(True)
+      self.frequencyDoubleSpinBox.setEnabled(False); self.frequencyConfirmationButton.setEnabled(False)
       print("response:", response)
       self.terminalOutputTextBrowser.append('>lpm1'); self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>");
 
@@ -366,62 +371,69 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
         self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>");
         self.flashLampVoltageLineEdit.setText(str(self.fLampVoltage))
         self._energyReadbackPending = True  # deferred to next temp poll
-      else: self.fLampVoltage=self.proposedVoltage
-      self.PowerEstimateValue.setText('%.2f'%np.interp(self.fLampVoltage,self.calibVolts,self.calibPower) + " W")
+        self.PowerEstimateValue.setText('%.2f'%np.interp(self.fLampVoltage,self.calibVolts,self.calibPower) + " W")
+      # On timeout (None): leave cache unchanged — don't assume command succeeded
     else:
       self.flashLampVoltageLineEdit.setText(str(self.fLampVoltage))
 
   def toggleActiveStatus(self):
-    with self._stateLock: self.activeStatus = 0 if self.activeStatus == 1 else 1
-    if self.activeStatus:
-       print(">a")
-       self.terminalOutputTextBrowser.append("<p style='color: black'>"+'>a'+"</p>");
-       response = self._sendCommand(b'>a\n')
-       if response is not None:
+    if not self.activeStatus:
+      # Activating
+      print(">a")
+      self.terminalOutputTextBrowser.append("<p style='color: black'>"+'>a'+"</p>");
+      response = self._sendCommand(b'>a\n')
+      if response is not None:
+        with self._stateLock: self.activeStatus = 1
         print("response:", response)
         self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
     else:
+      # Standby
       print(">s")
       self.terminalOutputTextBrowser.append("<p style='color: black'>"+'>s'+"</p>");
-      with self._stateLock: self.shutterStatus = 0; self.qSwitchStatus = 0
       response = self._sendCommand(b'>s\n')
       if response is not None:
+        with self._stateLock: self.activeStatus = 0; self.shutterStatus = 0; self.qSwitchStatus = 0
         print("response:", response)
         self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
     self.updateAllStatusIndicators()
 
   def toggleShutterStatus(self):
-    with self._stateLock: self.shutterStatus = 0 if self.shutterStatus == 1 else 1
-    if self.shutterStatus:
+    if not self.shutterStatus:
+      # Opening shutter
       print(">r1")
       self.terminalOutputTextBrowser.append("<p style='color: black'>"+'>r1'+"</p>");
       response = self._sendCommand(b'>r1\n')
       if response is not None:
+        with self._stateLock: self.shutterStatus = 1
         print("response:", response)
         self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
     else:
+      # Closing shutter
       print(">r0")
       self.terminalOutputTextBrowser.append("<p style='color: black'>"+'>r0'+"</p>");
       response = self._sendCommand(b'>r0\n')
       if response is not None:
+        with self._stateLock: self.shutterStatus = 0
         print("response:", response)
         self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
     self.updateAllStatusIndicators()
 
   def toggleQSwitchStatus(self):
     if self.qSwitchStatus:
-      with self._stateLock: self.qSwitchStatus = 0
+      # Disarming Q-switch
       print(">sq"); self.terminalOutputTextBrowser.append("<p style='color: black'>"+'>sq'+"</p>");
       response = self._sendCommand(b'>sq\n')
       if response is not None:
+        with self._stateLock: self.qSwitchStatus = 0
         print("response:", response)
         self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
     else:
-      with self._stateLock: self.qSwitchStatus = 1
+      # Arming Q-switch
       print(">pq"); self.terminalOutputTextBrowser.append("<p style='color: black'>"+'>pq'+"</p>");
       if self.dangerMode:
         response = self._sendCommand(b'>pq\n')
         if response is not None:
+          with self._stateLock: self.qSwitchStatus = 1
           print("response:", response)
           self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
     self.updateAllStatusIndicators()
@@ -441,9 +453,9 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
       return
     #Go to standby if active (required for mode switches)
     if self.activeStatus:
-      with self._stateLock: self.activeStatus = 0; self.shutterStatus = 0; self.qSwitchStatus = 0
       response = self._sendCommand(b'>s\n')
       if response is None: return
+      with self._stateLock: self.activeStatus = 0; self.shutterStatus = 0; self.qSwitchStatus = 0
       self.terminalOutputTextBrowser.append('>s (standby for mode switch)')
     #Ensure external lamp mode
     if self.flashLampMode != 1:
@@ -454,21 +466,21 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
       self.setQSwitchInternal()
       if not self.serialConnected: return
     #Activate lamps
-    with self._stateLock: self.activeStatus = 1
     response = self._sendCommand(b'>a\n')
     if response is None: return
+    with self._stateLock: self.activeStatus = 1
     self.terminalOutputTextBrowser.append('>a')
     self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
     #Open shutter
-    with self._stateLock: self.shutterStatus = 1
     response = self._sendCommand(b'>r1\n')
     if response is None: return
+    with self._stateLock: self.shutterStatus = 1
     self.terminalOutputTextBrowser.append('>r1')
     self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
     #Arm Q-switch
-    with self._stateLock: self.qSwitchStatus = 1
     response = self._sendCommand(b'>pq\n')
     if response is None: return
+    with self._stateLock: self.qSwitchStatus = 1
     self.terminalOutputTextBrowser.append('>pq')
     self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
     self.warmupActive = False
@@ -477,11 +489,11 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
         "<p style='color: blue'>Armed for external trigger (lamp external, QS internal, shutter open, QS armed).</p>")
 
   def stopLaser(self): #This does the same thing as toggleActiveStatus if active status == 1. But it's redundant for safety, in case gui and laser get de-synced somehow.
-    with self._stateLock: self.activeStatus = 0; self.shutterStatus = 0; self.qSwitchStatus = 0
     print(">s")
     self.terminalOutputTextBrowser.append("<p style='color: black'>"+'>s'+"</p>");
     response = self._sendCommand(b'>s\n')
     if response is not None:
+      with self._stateLock: self.activeStatus = 0; self.shutterStatus = 0; self.qSwitchStatus = 0
       print("response:", response)
       self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>");
     self.warmupActive = False
@@ -716,30 +728,30 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
     self.warmupActive = True
     #Ensure Q-switch is disabled
     if self.qSwitchStatus:
-      with self._stateLock: self.qSwitchStatus = 0
       response = self._sendCommand(b'>sq\n')
       if response is None: return
+      with self._stateLock: self.qSwitchStatus = 0
       self.terminalOutputTextBrowser.append('>sq')
     #Ensure shutter is closed
     if self.shutterStatus:
-      with self._stateLock: self.shutterStatus = 0
       response = self._sendCommand(b'>r0\n')
       if response is None: return
+      with self._stateLock: self.shutterStatus = 0
       self.terminalOutputTextBrowser.append('>r0')
     #Switch to internal trigger if needed (requires standby)
     if self.flashLampMode != 0:
       if self.activeStatus:
-        with self._stateLock: self.activeStatus = 0; self.shutterStatus = 0; self.qSwitchStatus = 0
         response = self._sendCommand(b'>s\n')
         if response is None: return
+        with self._stateLock: self.activeStatus = 0; self.shutterStatus = 0; self.qSwitchStatus = 0
         self.terminalOutputTextBrowser.append('>s (standby for mode switch)')
       self.setFlashLampInternal()
       if not self.serialConnected: return
     #Activate lamps if not already active (internal trigger fires immediately)
     if not self.activeStatus:
-      with self._stateLock: self.activeStatus = 1
       response = self._sendCommand(b'>a\n')
       if response is None: return
+      with self._stateLock: self.activeStatus = 1
       self.terminalOutputTextBrowser.append('>a')
       self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
     #Start temperature polling (60 seconds, matching LabView)
@@ -888,13 +900,7 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
   def _remoteSetVoltage(self, voltage_V):
     if voltage_V < 500 or voltage_V > 1400:
       print("Remote voltage %d out of range [500,1400]" % voltage_V); return
-    # Skip if already at target (within ±1V for int rounding)
-    with self._stateLock:
-      current = self.fLampVoltage
-    if abs(current - voltage_V) <= 1:
-      self.terminalOutputTextBrowser.append(
-          "<p style='color: gray'>[ZMQ] voltage already at %dV, skipping</p>" % current)
-      return
+    # Always send — deduplication is handled by BLACS worker (_last_sent_values)
     toWrite = ">vmo{vol}\n".format(vol=str(0)+str(voltage_V) if voltage_V<1000 else str(voltage_V))
     response = self._sendCommand(toWrite)
     if response is not None:
@@ -907,29 +913,57 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
       self.flashLampVoltageLineEdit.setText(str(self.fLampVoltage))
       self.PowerEstimateValue.setText('%.2f'%np.interp(self.fLampVoltage,self.calibVolts,self.calibPower) + " W")
       self._energyReadbackPending = True  # deferred to next temp poll
-    else:
-      with self._stateLock: self.fLampVoltage = voltage_V
-      self.flashLampVoltageLineEdit.setText(str(voltage_V))
-      self.PowerEstimateValue.setText('%.2f'%np.interp(voltage_V,self.calibVolts,self.calibPower) + " W")
+    # On timeout (None): leave cache unchanged — don't assume command succeeded
 
   def _remoteSetShutter(self, state):
-    """Set shutter: 1=open, 0=close. Respects safety: requires lamps active to open."""
+    """Set shutter to target state (not a toggle). 1=open, 0=close."""
     if state and not self.activeStatus:
       print("Remote shutter open rejected: lamps not active"); return
-    if state == self.shutterStatus: return  # already in desired state
-    self.toggleShutterStatus()
+    # Send the specific command for the target state — don't rely on cached state for toggle direction
+    if state:
+      response = self._sendCommand(b'>r1\n')
+      if response is not None:
+        with self._stateLock: self.shutterStatus = 1
+        self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
+    else:
+      response = self._sendCommand(b'>r0\n')
+      if response is not None:
+        with self._stateLock: self.shutterStatus = 0
+        self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
+    self.updateAllStatusIndicators()
 
   def _remoteSetLamps(self, state):
-    """Set lamps: 1=activate, 0=standby. Standby also clears shutter+qswitch."""
-    if state == self.activeStatus: return  # already in desired state
-    self.toggleActiveStatus()
+    """Set lamps to target state (not a toggle). 1=activate, 0=standby."""
+    # Send the specific command for the target state
+    if state:
+      response = self._sendCommand(b'>a\n')
+      if response is not None:
+        with self._stateLock: self.activeStatus = 1
+        self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
+    else:
+      response = self._sendCommand(b'>s\n')
+      if response is not None:
+        with self._stateLock: self.activeStatus = 0; self.shutterStatus = 0; self.qSwitchStatus = 0
+        self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
+    self.updateAllStatusIndicators()
 
   def _remoteSetQSwitch(self, state):
-    """Set Q-switch: 1=arm, 0=disarm. Requires lamps active and shutter open to arm."""
+    """Set Q-switch to target state (not a toggle). 1=arm, 0=disarm."""
     if state and (not self.activeStatus or not self.shutterStatus):
       print("Remote Q-switch arm rejected: requires lamps active + shutter open"); return
-    if state == self.qSwitchStatus: return  # already in desired state
-    self.toggleQSwitchStatus()
+    # Send the specific command for the target state
+    if state:
+      if self.dangerMode:
+        response = self._sendCommand(b'>pq\n')
+        if response is not None:
+          with self._stateLock: self.qSwitchStatus = 1
+          self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
+    else:
+      response = self._sendCommand(b'>sq\n')
+      if response is not None:
+        with self._stateLock: self.qSwitchStatus = 0
+        self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
+    self.updateAllStatusIndicators()
 
   def _remoteSetLampMode(self, mode):
     """Set lamp mode: 0=internal, 1=external. Requires standby."""
