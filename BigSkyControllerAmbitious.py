@@ -1045,7 +1045,6 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
       msg = "rejected: invalid qswitch_mode %d (expected 0/1/2)" % mode
       print(msg)
       return {"status": "ERROR", "message": msg}
-    else: print("Invalid Q-switch mode: %d" % mode)
 
   def safeExit(self):
     self.tempPollTimer.stop()
