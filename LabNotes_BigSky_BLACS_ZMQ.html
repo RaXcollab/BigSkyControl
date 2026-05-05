@@ -45,10 +45,10 @@
 </p>
 <ol>
   <li>ZMQ thread receives a <code>PROGRAM_VALUE</code> request from BLACS</li>
-  <li>ZMQ thread creates a <code>threading.Event</code> and calls <code>ctrl.executeRemoteCommand(param, value, done_event)</code></li>
+  <li>ZMQ thread creates a <code>concurrent.futures.Future</code> and calls <code>ctrl.executeRemoteCommand(param, value, future)</code></li>
   <li><code>executeRemoteCommand</code> emits a <code>pyqtSignal</code> (auto-queued to the main thread)</li>
-  <li>Qt main thread slot <code>_handleRemoteCommand</code> dispatches to the appropriate handler, does serial I/O, then calls <code>done_event.set()</code></li>
-  <li>ZMQ thread wakes up and sends the REP response back to BLACS</li>
+  <li>Qt main thread slot <code>_handleRemoteCommand</code> dispatches to the appropriate handler, does serial I/O, collects the handler's <code>{"status", "message"}</code> dict, and writes it to the future via <code>future.set_result(...)</code> in <code>finally</code></li>
+  <li>ZMQ thread reads the dict via <code>future.result(timeout=10.0)</code> and forwards it directly as the REP response. A <code>concurrent.futures.TimeoutError</code> is mapped to a generic timeout-error reply. Rejection paths (e.g. mode change while laser is firing) propagate as <code>{"status": "ERROR", "message": "rejected: ..."}</code> instead of the previous silent SUCCESS</li>
 </ol>
 <p>
   Shared state (<code>fLampVoltage</code>, <code>lastTemperature</code>, <code>activeStatus</code>, <code>shutterStatus</code>, <code>qSwitchStatus</code>) is protected by a <code>threading.Lock</code> (<code>_stateLock</code>) and exposed via thread-safe getters used by the ZMQ thread for <code>CHECK_VALUE</code> and PUB-SUB broadcasts.

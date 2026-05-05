@@ -172,6 +172,6 @@ This program is integrated into the BLACS experiment control system (labscript-s
 
 ### ZMQ Server Architecture
 
-The `BigSkyZmqServer` class lives in `HugeSkyController.pyw`. It runs a daemon thread with REP+PUB sockets. Connection names are parsed as `{laser_base}_{param}[_monitor]` and dispatched to the correct `SingleLaserController` via `executeRemoteCommand(param, value, done_event)` signal/slot pattern for thread safety. All serial I/O happens on the Qt main thread; the ZMQ thread only reads cached state (via thread-safe getters) or emits signals.
+The `BigSkyZmqServer` class lives in `HugeSkyController.pyw`. It runs a daemon thread with REP+PUB sockets. Connection names are parsed as `{laser_base}_{param}[_monitor]` and dispatched to the correct `SingleLaserController` via `executeRemoteCommand(param, value, future)` signal/slot pattern for thread safety, where `future` is a `concurrent.futures.Future` that the slot writes a `{"status", "message"}` dict to. The ZMQ thread reads the dict via `future.result(timeout=...)` and forwards it as the REP reply, so rejection paths (e.g. mode change while laser is firing) propagate as `{"status": "ERROR", "message": "rejected: ..."}` instead of silent SUCCESS. All serial I/O happens on the Qt main thread; the ZMQ thread only reads cached state (via thread-safe getters) or emits signals.
 
 **Reference implementation**: `C:\Users\radmo\labscript-suite\GUIs\rastering\raster_controller.py:_zmq_loop()` — same protocol pattern.
