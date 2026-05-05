@@ -945,7 +945,9 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
 
   def _remoteSetVoltage(self, voltage_V):
     if voltage_V < 500 or voltage_V > 1400:
-      print("Remote voltage %d out of range [500,1400]" % voltage_V); return
+      msg = "rejected: voltage %d out of range [500,1400]" % voltage_V
+      self.terminalOutputTextBrowser.append("<p style='color: orange'>[ZMQ] %s</p>" % msg)
+      return {"status": "ERROR", "message": msg}
     # Always send — deduplication is handled by BLACS worker (_last_sent_values)
     toWrite = ">vmo{vol}\n".format(vol=str(0)+str(voltage_V) if voltage_V<1000 else str(voltage_V))
     response = self._sendCommand(toWrite)
@@ -964,7 +966,9 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
   def _remoteSetShutter(self, state):
     """Set shutter to target state (not a toggle). 1=open, 0=close."""
     if state and not self.activeStatus:
-      print("Remote shutter open rejected: lamps not active"); return
+      msg = "rejected: lamps not active (cannot open shutter)"
+      self.terminalOutputTextBrowser.append("<p style='color: orange'>[ZMQ] %s</p>" % msg)
+      return {"status": "ERROR", "message": msg}
     # Send the specific command for the target state — don't rely on cached state for toggle direction
     if state:
       response = self._sendCommand(b'>r1\n')
@@ -996,7 +1000,9 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
   def _remoteSetQSwitch(self, state):
     """Set Q-switch to target state (not a toggle). 1=arm, 0=disarm."""
     if state and (not self.activeStatus or not self.shutterStatus):
-      print("Remote Q-switch arm rejected: requires lamps active + shutter open"); return
+      msg = "rejected: requires lamps active + shutter open"
+      self.terminalOutputTextBrowser.append("<p style='color: orange'>[ZMQ] %s</p>" % msg)
+      return {"status": "ERROR", "message": msg}
     # Send the specific command for the target state
     if state:
       if self.dangerMode:
@@ -1014,22 +1020,31 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
   def _remoteSetLampMode(self, mode):
     """Set lamp mode: 0=internal, 1=external. Requires standby."""
     if self.activeStatus:
+      msg = "rejected: laser active (must be in standby)"
       self.terminalOutputTextBrowser.append(
-          "<p style='color: orange'>[ZMQ] lamp_mode=%d rejected: laser active (must be in standby)</p>" % mode)
-      return
+          "<p style='color: orange'>[ZMQ] lamp_mode=%d %s</p>" % (mode, msg))
+      return {"status": "ERROR", "message": msg}
     if mode == 0: self.setFlashLampInternal()
     elif mode == 1: self.setFlashLampExternal()
-    else: print("Invalid lamp mode: %d" % mode)
+    else:
+      msg = "rejected: invalid lamp_mode %d (expected 0 or 1)" % mode
+      print(msg)
+      return {"status": "ERROR", "message": msg}
 
   def _remoteSetQSwitchMode(self, mode):
     """Set Q-switch mode: 0=internal, 1=burst, 2=external. Requires standby."""
     if self.activeStatus:
+      msg = "rejected: laser active (must be in standby)"
       self.terminalOutputTextBrowser.append(
-          "<p style='color: orange'>[ZMQ] qswitch_mode=%d rejected: laser active (must be in standby)</p>" % mode)
-      return
+          "<p style='color: orange'>[ZMQ] qswitch_mode=%d %s</p>" % (mode, msg))
+      return {"status": "ERROR", "message": msg}
     if mode == 0: self.setQSwitchInternal()
     elif mode == 1: self.setQSwitchBurst()
     elif mode == 2: self.setQSwitchExternal()
+    else:
+      msg = "rejected: invalid qswitch_mode %d (expected 0/1/2)" % mode
+      print(msg)
+      return {"status": "ERROR", "message": msg}
     else: print("Invalid Q-switch mode: %d" % mode)
 
   def safeExit(self):
