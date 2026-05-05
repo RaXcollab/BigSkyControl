@@ -8,6 +8,7 @@ import serial.tools.list_ports
 import ctypes
 import pickle
 import threading
+import concurrent.futures
 import json
 
 try:
@@ -220,15 +221,15 @@ class BigSkyZmqServer(QObject):
 
         self._log("ZMQ: PROGRAM_VALUE %s = %s (wait_for_lock=%s)" % (connection, value, wait_for_lock))
 
-        # Dispatch to controller's main thread via signal/slot + threading.Event
-        done_event = threading.Event()
-        ctrl.executeRemoteCommand(param, value, done_event)
-        done_event.wait(timeout=10.0)
-
-        if done_event.is_set():
-          reply({"status": "SUCCESS"})
-        else:
+        # Dispatch to controller's main thread via signal/slot + Future
+        future = concurrent.futures.Future()
+        ctrl.executeRemoteCommand(param, value, future)
+        try:
+          result = future.result(timeout=10.0)
+        except concurrent.futures.TimeoutError:
           reply({"status": "ERROR", "message": "timeout waiting for command to complete"})
+        else:
+          reply(result)
         continue
 
       # Unknown action
