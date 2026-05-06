@@ -157,6 +157,39 @@
   <li><strong>PUB-SUB</strong>: All monitor topics broadcast at ~4 Hz, heartbeat at ~1 Hz</li>
 </ul>
 
+<h2>Known Limitations: Setter Verify Gap</h2>
+<p>
+  Of the GUI's serial setters, only <code>_setLampMode</code> (used by
+  <code>setFlashLampInternal</code> / <code>setFlashLampExternal</code> /
+  <code>_remoteSetLampMode</code>) parses the controller response and propagates a
+  verify-mismatch as <code>{"status": "ERROR", "message": "rejected: ... did not take
+  effect"}</code> back to BLACS. The other setters trust the laser to obey:
+</p>
+<ul>
+  <li><code>setQSwitchInternal</code> / <code>setQSwitchBurst</code> /
+    <code>setQSwitchExternal</code> (lines ~325-345): write <code>self.qSwitchMode = N</code>
+    after the send without parsing the response. If the controller silently rejects
+    <code>&gt;qsmN</code> (e.g. an internal interlock), the cached mode and BLACS's
+    <code>_last_sent_values</code> drift from reality until the next CHECK_VALUE poll
+    re-syncs.</li>
+  <li><code>_remoteSetVoltage</code> (line ~946): caches
+    <code>self.fLampVoltage = int(response.strip(...))</code> from the controller's reply but does
+    NOT compare against the requested value. A clamped or rounded reply
+    (e.g. <code>&gt;vmo1000</code> returning <code>"voltage m 999 V"</code>) caches 999 silently
+    while BLACS still believes the command succeeded as 1000.</li>
+</ul>
+<p>
+  The risk is bounded: <code>_last_sent_values</code> is rewritten by every
+  <code>check_remote_values</code> tick on the BLACS worker (line 290 of
+  <code>BigSkyHub/blacs_workers.py</code>), so the BLACS-side cache resyncs to
+  reality within one CHECK_VALUE cycle (~10 s). The window is "BLACS programs a
+  value that the laser silently ignores, then re-uses the cached value to make a
+  decision before the next CHECK_VALUE poll runs." For consistency with the lamp-mode
+  setter, future work is to apply the same parse-and-verify pattern (regex via
+  <code>_TRAILING_INT_RE</code>, return <code>ERROR</code> dict on mismatch) to all serial
+  setters in <code>BigSkyControllerAmbitious.py</code>.
+</p>
+
 <h2>Next Steps</h2>
 <ol>
   <li><strong>BLACS Device (BigSkyHub)</strong>: Create the labscript-side device files in <code>userlib/user_devices/BigSkyHub/</code> that subclass <code>RemoteControl</code> with correct connection names, ports, and channel definitions</li>
