@@ -344,23 +344,28 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
   def _setLampMode(self, target, cmd_label):
     """Send >lpm{target} and verify the controller's reported mode.
 
-    On success: caches the *actual* reported value (not the requested one),
-    updates radio buttons + frequency interlock to reflect it, and warns in
-    orange if the controller reported a different mode than requested.
-    On parse failure: logs the raw response in red and leaves the cache
-    unchanged — callers must re-check ``self.flashLampMode`` if they need a
-    confirmed state (e.g. ``startLaser`` aborts when mode != 1).
+    On success (actual == target): returns SUCCESS, caches the actual value,
+    updates radio buttons + frequency interlock.
+    On serial failure: returns ERROR with 'rejected: serial failure' so the
+    ZMQ caller (BLACS) doesn't update its cache to the requested value.
+    On parse failure: returns ERROR with 'rejected: could not parse'; cache
+    unchanged.
+    On verify mismatch (actual != target): returns ERROR with 'rejected: ...
+    did not take effect'. The cached flashLampMode is set to the *actual*
+    reported value (so callers like ``startLaser`` see reality).
     """
     cmd_bytes = ('>%s\n' % cmd_label).encode('ascii')
     print(cmd_label)
     response = self._sendCommand(cmd_bytes)
-    if response is None: return  # serial failure — _sendCommand already logged
+    if response is None:
+      msg = "rejected: serial failure on %s" % cmd_label
+      return {"status": "ERROR", "message": msg}
     m = _TRAILING_INT_RE.search(response.strip())
     if m is None:
+      msg = "rejected: could not parse %s response (%r)" % (cmd_label, response)
       self.terminalOutputTextBrowser.append(
-          "<p style='color: red'>Could not parse %s response: %r — flashLampMode unchanged</p>"
-          % (cmd_label, response))
-      return
+          "<p style='color: red'>%s — flashLampMode unchanged</p>" % msg)
+      return {"status": "ERROR", "message": msg}
     actual = int(m.group(1))
     with self._stateLock: self.flashLampMode = actual
     if actual == 0:
@@ -372,19 +377,21 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
     else:
       self.terminalOutputTextBrowser.append(
           "<p style='color: orange'>Unexpected lamp mode reported: %d</p>" % actual)
-    if actual != target:
-      self.terminalOutputTextBrowser.append(
-          "<p style='color: orange'>Warning: %s did not take effect (got %d)</p>"
-          % (cmd_label, actual))
     print("response:", response)
     self.terminalOutputTextBrowser.append(cmd_label)
     self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
+    if actual != target:
+      msg = "rejected: %s did not take effect (got %d)" % (cmd_label, actual)
+      self.terminalOutputTextBrowser.append(
+          "<p style='color: orange'>Warning: %s</p>" % msg)
+      return {"status": "ERROR", "message": msg}
+    return {"status": "SUCCESS"}
 
   def setFlashLampInternal(self):
-    self._setLampMode(0, '>lpm0')
+    return self._setLampMode(0, '>lpm0')
 
   def setFlashLampExternal(self):
-    self._setLampMode(1, '>lpm1')
+    return self._setLampMode(1, '>lpm1')
 
   def setVoltage(self):
     self.proposedVoltage = int(self.flashLampVoltageSpinBox.value())
@@ -1024,8 +1031,8 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
       self.terminalOutputTextBrowser.append(
           "<p style='color: orange'>[ZMQ] lamp_mode=%d %s</p>" % (mode, msg))
       return {"status": "ERROR", "message": msg}
-    if mode == 0: self.setFlashLampInternal()
-    elif mode == 1: self.setFlashLampExternal()
+    if mode == 0: return self.setFlashLampInternal()
+    elif mode == 1: return self.setFlashLampExternal()
     else:
       msg = "rejected: invalid lamp_mode %d (expected 0 or 1)" % mode
       print(msg)
