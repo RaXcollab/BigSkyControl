@@ -228,14 +228,23 @@ Trigger Setting</string>
               </widget>
              </item>
              <item>
-              <widget class="QLineEdit" name="flashLampVoltageLineEdit">
+              <widget class="QSpinBox" name="flashLampVoltageSpinBox">
                <property name="font">
                 <font>
                  <pointsize>14</pointsize>
                 </font>
                </property>
-               <property name="maxLength">
-                <number>4</number>
+               <property name="minimum">
+                <number>500</number>
+               </property>
+               <property name="maximum">
+                <number>1400</number>
+               </property>
+               <property name="singleStep">
+                <number>1</number>
+               </property>
+               <property name="value">
+                <number>500</number>
                </property>
               </widget>
              </item>
@@ -248,6 +257,13 @@ Trigger Setting</string>
                </property>
                <property name="text">
                 <string>V</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="voltageConfirmationButton">
+               <property name="text">
+                <string>Confirm Voltage</string>
                </property>
               </widget>
              </item>
@@ -536,7 +552,8 @@ Power @ 10Hz:</string>
         <layout class="QHBoxLayout" name="keepWarmLayout">
          <item>
           <widget class="QCheckBox" name="keepWarmCheckBox">
-           <property name="text"><string>Keep Warm (auto-poll temperature)</string></property>
+           <property name="text"><string>Auto-warmup if cold (&lt;37°C)</string></property>
+           <property name="toolTip"><string>While in manual mode, automatically enter warmup if temperature drops below 37°C. Temperature polling itself is always on while serial is connected.</string></property>
           </widget>
          </item>
         </layout>
