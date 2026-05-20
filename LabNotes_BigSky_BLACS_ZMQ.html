@@ -198,5 +198,26 @@
   <li><strong>Serial Number Mapping</strong>: Populate <code>LASER_SN_TO_CONNECTION</code> dict once laser serial numbers are confirmed</li>
 </ol>
 
+<h2>Changelog</h2>
+
+<h3>2026-05-19 &mdash; Doc/code refactor</h3>
+<ul>
+  <li>
+    <strong>Shared connection list now explicitly includes <code>YAG_n_keep_warm</code></strong> (10 writable params per laser, not 9). Per-laser dispatch via <code>_handleRemoteCommand</code>; tab-side hysteresis sync with BLACS&mdash;the parameter has always been handled in code but was missing from the original table above and from the <code>bigsky-yag-laser-controller</code> agent doc.
+  </li>
+  <li>
+    <strong><code>LASER_SN_TO_CONNECTION</code> dict populated</strong> in <code>HugeSkyController.pyw</code> with the lab's two YAG lasers: <code>{'151': 'YAG_1', '213': 'YAG_2'}</code>. Previously empty, so BLACS connection names came from the <code>_laserLaunchOrder</code> counter fallback&mdash;deterministic-by-accident only (stable Windows COM port enumeration). Now deterministic-by-design and immune to USB re-enumeration. SN 082 (<code>laserNames.pkl</code> label "sdfhjkasehkfs", typo/test entry) and SN 261 (label "COBRA PUMP", different physical laser, not BLACS-driven) are intentionally omitted; counter fallback still applies if those COM ports are launched. Closes the "Serial Number Mapping" Next-Step item above.
+  </li>
+  <li>
+    <strong>Agent doc name drifts corrected</strong>: <code>bigsky-yag-laser-controller.md</code> now matches the actual code symbol names (<code>_onConnectionChanged</code>, not <code>_onLaserConnectionChanged</code>; <code>_scanPorts</code>, not <code>rescanPorts</code>; tab text <code>(DISCONNECTED)</code>, not <code>(OFFLINE)</code>).
+  </li>
+  <li>
+    <strong><code>README.md</code> refreshed</strong>: removed reference to the removed <code>BigSkyControlSimplified.py</code>; updated calibration file path from the legacy single <code>CalibrationDataBigSky.csv</code> to the current per-laser <code>CalibrationFiles/*.csv</code> layout.
+  </li>
+  <li>
+    <strong>Setter Verify Gap</strong>: still unaddressed&mdash;only <code>_setLampMode</code> parses and verifies the controller response. Voltage / Q-switch / shutter setters cache without verify; the ~10 s <code>check_remote_values</code> resync bounds the drift window. Confirmed during the 2026-05-19 audit; explicitly deferred per user direction ("would slow down non-essential steps"). Tracked in <code>docs/known-latent-issues.md</code> in the parent labscript-suite repo.
+  </li>
+</ul>
+
 </body>
 </html>
