@@ -246,8 +246,14 @@ class BigSkyZmqServer(QObject):
 # Edit this dict to match your physical setup.
 # Serial numbers are strings as returned by the >sn command.
 LASER_SN_TO_CONNECTION = {
-  # Example: '123': 'YAG_1', '456': 'YAG_2'
-  # If empty, falls back to tab-order assignment (first laser = YAG_1, second = YAG_2)
+  '151': 'YAG_1',
+  '213': 'YAG_2',
+  # SN 082 (label 'sdfhjkasehkfs' in laserNames.pkl — test/typo entry) and
+  # SN 261 (label 'COBRA PUMP' — a different physical laser, not a BLACS-driven YAG)
+  # are intentionally omitted. If those COM ports are launched, the
+  # _laserLaunchOrder counter fallback applies (identical to pre-2026-05-19 behavior).
+  # Populated 2026-05-19 per refactor plan; previously this dict was empty
+  # placeholder, which made YAG_N assignment deterministic-by-accident only.
 }
 
 
@@ -255,7 +261,7 @@ class BigSkyHub(QMainWindow):
   def __init__(self):
     super().__init__()
     self.setWindowTitle('Big Sky Controller Hub')
-    self.setWindowIcon(QIcon('BigSkyWindowIcon.png'))
+    self.setWindowIcon(QIcon('BigSkyDesktopIcon.ico'))
     self.left = 0; self.width = 900
     self.top = 0 ; self.height = 800
     self.setGeometry(self.left, self.top, self.width, self.height)
@@ -285,7 +291,7 @@ class HomeTab(QWidget):
     try:
         with open('laserNames.pkl','rb') as file: self.laserNames=pickle.load(file); file.close()
     except: self.laserNames={}
-    self.layout = QGridLayout(parent)
+    self.layout = QGridLayout(self)
     self.buttons=[]
     self.devices=[]
     self.serialNumbers=[]
@@ -311,7 +317,6 @@ class HomeTab(QWidget):
     btnContainer = QWidget()
     btnContainer.setLayout(btnLayout)
     self.layout.addWidget(btnContainer, bottomRow, 1)
-    self.setLayout(self.layout)
 
   def _scanPorts(self):
     """Scan COM ports for BigSky lasers. Adds new ones to the button list."""

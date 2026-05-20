@@ -124,6 +124,7 @@ This program is integrated into the BLACS experiment control system (labscript-s
 | `YAG_1_warmup` | 0/1 | Stop/start warmup |
 | `YAG_1_start_lasing` | any | Full start sequence (a→r1→pq) |
 | `YAG_1_stop` | any | Full stop (standby) |
+| `YAG_1_keep_warm` | 0/1 | Enable/disable Auto Keep Warm (synced from BLACS) |
 
 | Checkable (CHECK_VALUE only, no PUB) | Value | Description |
 |---------------------------------------|-------|-------------|
@@ -151,4 +152,4 @@ Same pattern for `YAG_2_*`. Typical triggered mode: Q-switch internal (0) + flas
 - **ZMQ behavior**: Server returns `{"status": "ERROR", "message": "laser disconnected"}` for CHECK_VALUE/PROGRAM_VALUE when laser is offline; PUB-SUB skips broadcasting for disconnected lasers
 - **BLACS handling**: `BigSkyWorker` in labscript-suite gracefully skips "laser disconnected" errors with `logger.warning` (same pattern as "unknown connection")
 
-**If modifying the ZMQ protocol** (connection names, message format, PUB-SUB topics), the BLACS device must also be updated. For BLACS architecture questions (state machines, Qt thread safety, device base classes), defer to the `labscript-amo-expert` agent in the labscript-suite workspace (`C:\Users\radmo\labscript-suite\.claude\agents\`).
+**If modifying the ZMQ protocol** (connection names, message format, PUB-SUB topics), the BLACS device must also be updated. For BLACS architecture questions (state machines, Qt thread safety, device base classes), defer to the `amo-expert` agent in the labscript-suite workspace (`C:\Users\radmo\labscript-suite\.claude\agents\`).
