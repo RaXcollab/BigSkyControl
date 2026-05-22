@@ -10,6 +10,8 @@ import os
 import concurrent.futures
 import threading
 
+from serial_io import SerialIOMixin
+
 # Match the trailing integer in a BigSky response (e.g. "LP synch :  1\r\n" → 1).
 # Tolerant of leading/trailing whitespace and varying prefix punctuation so we
 # don't have to hard-code each command's exact response prefix.
@@ -19,7 +21,7 @@ qtCreatorFile = "GuiBigSkyWidget.ui" # Enter file here.
 
 Ui_Widget, QtBaseClass = uic.loadUiType(qtCreatorFile)
 
-class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
+class SingleLaserController(SerialIOMixin, QtWidgets.QWidget, Ui_Widget):
   #Signal for thread-safe remote command execution from ZMQ daemon thread
   _remoteCommandRequested = pyqtSignal(str, object, object)  # (command, value, future)
   connectionStatusChanged = pyqtSignal(bool)  # emitted on disconnect/reconnect
@@ -153,127 +155,6 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
     self.terminalInputLineEdit.returnPressed.connect(self.sendTerminalCommand)
     self.terminalInputLabel.setEnabled(False); self.terminalInputLineEdit.setEnabled(False)
 
-
-  # --- Serial I/O gateway ---
-
-  def _sendCommand(self, cmd_bytes):
-    """Send a command to the laser and return the response string, or None on failure.
-
-    All serial I/O must route through this method. On repeated failures,
-    calls _handleDisconnect(). Callers must check for None return.
-    """
-    if not self.serialConnected:
-      return None
-    try:
-      self.ser.flush()
-      self.ser.write(cmd_bytes if isinstance(cmd_bytes, bytes) else bytes(cmd_bytes, "utf-8"))
-      response = self.ser.read(140).decode('utf-8')
-      if not response.strip():
-        self._consecutiveErrors += 1
-        if self._consecutiveErrors >= 3:
-          self._handleDisconnect("3 consecutive empty responses")
-        return None
-      self._consecutiveErrors = 0
-      return response
-    except (serial.SerialException, OSError) as e:
-      self._handleDisconnect("serial error: %s" % e)
-      return None
-    except UnicodeDecodeError as e:
-      self._consecutiveErrors += 1
-      if self._consecutiveErrors >= 3:
-        self._handleDisconnect("3 consecutive decode errors: %s" % e)
-      return None
-
-  def _handleDisconnect(self, reason=""):
-    """Handle serial disconnection: reset state, update GUI, start reconnect timer."""
-    if not self.serialConnected:
-      return  # already disconnected
-    self.serialConnected = False
-    self._consecutiveErrors = 0
-    self._blacsConnected = False
-
-    # Reset all cached hardware state
-    with self._stateLock:
-      self.activeStatus = 0
-      self.shutterStatus = 0
-      self.qSwitchStatus = 0
-      self.flashLampMode = 0
-      self.qSwitchMode = 0
-    self.warmupActive = False
-    if self.keepWarmActive:
-      self.keepWarmActive = False
-      self._warmupTriggered = False
-      self.keepWarmCheckBox.blockSignals(True)
-      self.keepWarmCheckBox.setChecked(False)
-      self.keepWarmCheckBox.blockSignals(False)
-
-    # Close the dead serial port
-    try:
-      self.ser.close()
-    except Exception:
-      pass
-
-    # Update GUI
-    self.label.setText("DISCONNECTED \u2014 " + self.labelString)
-    self.terminalOutputTextBrowser.append(
-        "<p style='color: red'>Serial disconnected: %s</p>" % reason)
-    self.updateAllStatusIndicators()
-    self.overallStatusLabel.setText("OVERALL: DISCONNECTED")
-    self._setLabelColor(self.overallStatusLabel, bg="#8B0000", fg="white")
-
-    # Start reconnect attempts
-    self._reconnectTimer.start(5000)
-
-    # Notify hub/ZMQ
-    self.connectionStatusChanged.emit(False)
-    print("Serial disconnected: %s" % reason)
-
-  def _attemptReconnect(self):
-    """Try to re-establish serial connection. Called by _reconnectTimer every 5s."""
-    try:
-      self.ser = serial.Serial(self.comPort, 9600, timeout=1)
-      self.ser.flush()
-      self.ser.write(b'>cg\n')
-      response = self.ser.read(140).decode('utf-8')
-      temp = float(response.strip('\r\ntemp.CG d'))
-      self._handleReconnect(temp)
-    except Exception:
-      # Still disconnected — timer will retry
-      try:
-        self.ser.close()
-      except Exception:
-        pass
-
-  def _handleReconnect(self, initial_temp):
-    """Restore state after successful reconnection."""
-    self._reconnectTimer.stop()
-    self.serialConnected = True
-    self._consecutiveErrors = 0
-
-    with self._stateLock:
-      self.lastTemperature = initial_temp
-
-    self.terminalOutputTextBrowser.append(
-        "<p style='color: green'>Serial reconnected! Re-querying laser state...</p>")
-
-    # Re-query all laser state
-    self.update_fLampVoltage()
-    self.updateFreq()
-    self.update_fLampMode()
-    self.update_qSwitchMode()
-    self.update_fLampEnergy()
-    self.updateTemp()
-
-    # Restore GUI
-    self.label.setText(self.labelString)
-    self.updateAllStatusIndicators()
-
-    self.connectionStatusChanged.emit(True)
-    print("Serial reconnected to %s" % self.comPort)
-
-  def isConnected(self):
-    """Return serial connection status. Thread-safe (GIL-atomic bool read)."""
-    return self.serialConnected
 
   @pyqtSlot()
   def _onBlacsHello(self):
@@ -1053,16 +934,6 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
       print(msg)
       return {"status": "ERROR", "message": msg}
 
-  def safeExit(self):
-    self.tempPollTimer.stop()
-    self._reconnectTimer.stop()
-    print(">s")
-    if self.serialConnected:
-      try:
-        self.ser.flush(); self.ser.write(b'>s\n'); response = self.ser.read(140).decode('utf-8'); print("response:", response)
-        self.ser.close()
-      except Exception:
-        pass
 
 if __name__ == "__main__":
   app = QtWidgets.QApplication(sys.argv)
