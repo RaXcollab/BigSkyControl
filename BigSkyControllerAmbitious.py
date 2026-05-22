@@ -12,6 +12,7 @@ import threading
 
 from serial_io import SerialIOMixin
 from remote_bridge import RemoteBridgeMixin
+from compound_sequences import CompoundSequencesMixin
 
 # Match the trailing integer in a BigSky response (e.g. "LP synch :  1\r\n" → 1).
 # Tolerant of leading/trailing whitespace and varying prefix punctuation so we
@@ -22,7 +23,7 @@ qtCreatorFile = "GuiBigSkyWidget.ui" # Enter file here.
 
 Ui_Widget, QtBaseClass = uic.loadUiType(qtCreatorFile)
 
-class SingleLaserController(SerialIOMixin, RemoteBridgeMixin, QtWidgets.QWidget, Ui_Widget):
+class SingleLaserController(SerialIOMixin, RemoteBridgeMixin, CompoundSequencesMixin, QtWidgets.QWidget, Ui_Widget):
   #Signal for thread-safe remote command execution from ZMQ daemon thread
   _remoteCommandRequested = pyqtSignal(str, object, object)  # (command, value, future)
   connectionStatusChanged = pyqtSignal(bool)  # emitted on disconnect/reconnect
@@ -368,57 +369,6 @@ class SingleLaserController(SerialIOMixin, RemoteBridgeMixin, QtWidgets.QWidget,
         print("response:", response)
         self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
 
-  def startLaser(self):
-    """Arm for external-trigger lasing: ensure external modes, then activate all."""
-    if not self.serialConnected:
-      self.terminalOutputTextBrowser.append("<p style='color: red'>Cannot arm: no serial connection</p>")
-      return
-    #Go to standby (required for mode switches — always send, don't trust cache)
-    response = self._sendCommand(b'>s\n')
-    if response is None: return
-    with self._stateLock: self.activeStatus = 0; self.shutterStatus = 0; self.qSwitchStatus = 0
-    self.terminalOutputTextBrowser.append('>s (standby for mode switch)')
-    #Set external lamp mode (always send — don't trust cache)
-    self.setFlashLampExternal()
-    if not self.serialConnected: return
-    if self.flashLampMode != 1:
-      self.terminalOutputTextBrowser.append(
-          "<p style='color: red'>Arm aborted: lamp mode is %d, not external (1)</p>" % self.flashLampMode)
-      return
-    #Activate lamps
-    response = self._sendCommand(b'>a\n')
-    if response is None: return
-    with self._stateLock: self.activeStatus = 1
-    self.terminalOutputTextBrowser.append('>a')
-    self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
-    #Open shutter
-    response = self._sendCommand(b'>r1\n')
-    if response is None: return
-    with self._stateLock: self.shutterStatus = 1
-    self.terminalOutputTextBrowser.append('>r1')
-    self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
-    #Arm Q-switch
-    response = self._sendCommand(b'>pq\n')
-    if response is None: return
-    with self._stateLock: self.qSwitchStatus = 1
-    self.terminalOutputTextBrowser.append('>pq')
-    self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
-    self.warmupActive = False
-    self.updateAllStatusIndicators()
-    self.terminalOutputTextBrowser.append(
-        "<p style='color: blue'>Armed for external trigger (lamp external, QS internal, shutter open, QS armed).</p>")
-
-  def stopLaser(self): #This does the same thing as toggleActiveStatus if active status == 1. But it's redundant for safety, in case gui and laser get de-synced somehow.
-    print(">s")
-    self.terminalOutputTextBrowser.append("<p style='color: black'>"+'>s'+"</p>");
-    response = self._sendCommand(b'>s\n')
-    if response is not None:
-      with self._stateLock: self.activeStatus = 0; self.shutterStatus = 0; self.qSwitchStatus = 0
-      print("response:", response)
-      self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>");
-    self.warmupActive = False
-    self.updateAllStatusIndicators()
-
   def toggleTerminalInput(self):
     if self.terminalEnabled:
       self.terminalEnabled=False;
@@ -642,102 +592,6 @@ class SingleLaserController(SerialIOMixin, RemoteBridgeMixin, QtWidgets.QWidget,
     else:
       self.temperatureStatusLabel.setText("TEMP: %.1f C (OK)" % temp)
       self._setLabelColor(self.temperatureStatusLabel, bg="#90EE90", fg="black")
-
-  def startWarmup(self):
-    if not self.serialConnected:
-      self.terminalOutputTextBrowser.append("<p style='color: red'>Cannot warmup: no serial connection</p>")
-      return
-    self.warmupActive = True
-    #Go to standby (always send — clears shutter/qswitch, required for mode switch)
-    response = self._sendCommand(b'>s\n')
-    if response is None: return
-    with self._stateLock: self.activeStatus = 0; self.shutterStatus = 0; self.qSwitchStatus = 0
-    self.terminalOutputTextBrowser.append('>s (standby for warmup)')
-    #Set internal lamp mode (always send — don't trust cache)
-    self.setFlashLampInternal()
-    if not self.serialConnected: return
-    if self.flashLampMode != 0:
-      self.terminalOutputTextBrowser.append(
-          "<p style='color: red'>Warmup aborted: lamp mode is %d, not internal (0)</p>" % self.flashLampMode)
-      return
-    #Activate lamps (internal trigger fires immediately)
-    response = self._sendCommand(b'>a\n')
-    if response is None: return
-    with self._stateLock: self.activeStatus = 1
-    self.terminalOutputTextBrowser.append('>a')
-    self.terminalOutputTextBrowser.append("<p style='color: green'>"+response.strip('\r\n')+"</p>")
-    self.updateTemp()
-    self.updateAllStatusIndicators()
-    self.terminalOutputTextBrowser.append(
-        "<p style='color: blue'>Warmup started (internal trigger). Lamps firing, shutter closed.</p>")
-
-  def toggleKeepWarm(self, checked):
-    """Toggle the auto-warmup-if-cold behaviour.
-
-    Temperature polling and display are always on while serial is connected;
-    this toggle only governs whether the GUI auto-enters warmup when the
-    coolant temperature drops below TEMP_COLD (37°C).
-
-    Uses hysteresis to prevent oscillation:
-    - Triggers warmup when temp drops below TEMP_COLD (37°C)
-    - Resets trigger when temp rises to TEMP_OPERATING (39°C)
-    Works standalone (no BLACS needed) and can be synced from BLACS via ZMQ.
-    """
-    self.keepWarmActive = checked
-    if checked:
-      self._warmupTriggered = False
-      self.terminalOutputTextBrowser.append(
-          "<p style='color: blue'>Auto-warmup enabled — will enter warmup if temp &lt; %.0f°C.</p>"
-          % self.TEMP_COLD)
-      # Check temperature immediately
-      self._evaluateKeepWarm()
-    else:
-      self._warmupTriggered = False
-      self.warmupActive = False
-      self.terminalOutputTextBrowser.append(
-          "<p style='color: blue'>Auto-warmup disabled.</p>")
-
-  def pollTemperature(self):
-    if not self.serialConnected:
-      return
-    self.updateTemp()
-    # Latched energy readback after voltage change
-    if self._energyReadbackPending:
-      self._energyReadbackPending = False
-      self.update_fLampEnergy()
-    if self.warmupActive and self.lastTemperature >= self.TEMP_OPERATING:
-      self.terminalOutputTextBrowser.append(
-          "<p style='color: green'>Temperature %.1fC >= %.1fC. Laser is warm enough to lase.</p>"
-          % (self.lastTemperature, self.TEMP_OPERATING))
-      self.warmupActive = False
-    # Auto Keep Warm: check if we need to enter warmup
-    self._evaluateKeepWarm()
-    self.updateAllStatusIndicators()
-
-  def _evaluateKeepWarm(self):
-    """Check if Auto Keep Warm should trigger warmup.
-
-    Uses hysteresis to prevent oscillation:
-    - Triggers warmup when temp drops below TEMP_COLD (37°C)
-    - Resets trigger when temp rises to TEMP_OPERATING (39°C)
-    Matches the BLACS tab's _evaluate_keep_warm hysteresis logic.
-    """
-    if not self.keepWarmActive:
-      return
-    if not self.serialConnected:
-      return
-    # Defer to BLACS when it's actively controlling (auto-expires after 5 min)
-    if self._blacsConnected and (time.time() - self._lastBlacsContact) < 300:
-      return
-    temp = self.lastTemperature
-    if temp < self.TEMP_COLD and not self._warmupTriggered:
-      self._warmupTriggered = True
-      self.terminalOutputTextBrowser.append(
-          "<p style='color: blue'>Auto-warmup: cold (%.1f°C), entering warmup.</p>" % temp)
-      self.startWarmup()
-    elif temp >= self.TEMP_OPERATING:
-      if self._warmupTriggered:
-        self._warmupTriggered = False
 
   # --- Thread-safe accessors for ZMQ server ---
 
