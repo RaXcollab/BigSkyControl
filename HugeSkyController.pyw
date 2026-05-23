@@ -1,3 +1,4 @@
+import os
 import sys
 from PyQt5.QtWidgets import (QMainWindow, QApplication, QPushButton,
  QWidget, QAction, QTabWidget,QVBoxLayout, QGridLayout, QTabBar, QLineEdit, QTextBrowser)
@@ -18,8 +19,216 @@ except ImportError:
   ZMQ_AVAILABLE = False
   print("WARNING: zmq not available. ZMQ server will not start.")
 
+# zmq_v2 protocol foundation lives in the parent labscript-suite repo.
+# This GUI runs in conda env `guis` (not `labscript`) so we inject the path.
+_EXTERNAL_LIB = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),
+    '..', '..', 'userlib', 'external_gui_lib',
+))
+if _EXTERNAL_LIB not in sys.path:
+  sys.path.insert(0, _EXTERNAL_LIB)
+from zmq_v2 import (
+    RemoteControlServerBase, handler, encode_reply,
+    PROTOCOL_VERSION, ZmqRepTransport,
+)
+
 
 # --- ZMQ Server for BLACS integration ---
+
+
+class _BigSkyV2Server(RemoteControlServerBase):
+  """v2 protocol dispatcher composed inside BigSkyZmqServer.
+
+  Lives on the same daemon thread as the PUB loop; ``serve_once``
+  blocks up to ``timeout_ms`` on the REP socket, then dispatches via
+  @handler-decorated methods below.
+
+  Holds a back-reference to the outer ``BigSkyZmqServer`` to read
+  ``_lasers`` / ``WRITABLE_PARAMS`` / etc. No state of its own beyond
+  base-class scaffolding.
+  """
+
+  # Hub-mode: ADVERTISED_CONNECTIONS is dynamic (lasers register/unregister
+  # at runtime), so we override _handle_hello below. The class-attr stays
+  # None to skip the base default.
+  CAPABILITIES = frozenset({"monitors", "heartbeat"})
+
+  def __init__(self, outer, transport):
+    super().__init__("BigSkyLasers", transport)
+    self._outer = outer
+
+  # ---- HELLO override (hub-mode + side-effect signals) ----
+  def _handle_hello(self, request_id):
+    # Side-effect: notify lasers BLACS is connected. Queued signal cross
+    # to the Qt main thread — emit returns immediately, slot fires later.
+    # Emitting BEFORE building the reply lets the slot start running in
+    # parallel with the ZMQ send. Safe per blacs-expert audit 2026-05-23.
+    for ctrl in list(self._outer._lasers.values()):
+      ctrl._blacsHelloReceived.emit()
+    self._outer._log("ZMQ: HELLO received")
+    return encode_reply(
+        status="SUCCESS",
+        request_id=request_id,
+        extra={
+            "protocol_version": PROTOCOL_VERSION,
+            "server": self._server_name,
+            "capabilities": sorted(self.CAPABILITIES),
+            # Per Q1 §10-resolved: hub advertises prefix patterns.
+            "connections": [
+                "%s_*" % name
+                for name in sorted(self._outer._lasers.keys())
+            ],
+        },
+    )
+
+  # ---- PROGRAM_VALUE ----
+  @handler("PROGRAM_VALUE")
+  def _handle_program(self, connection, value, args, request_id):
+    base, param, is_monitor = self._outer._parse_connection(connection)
+    if base is None or base not in self._outer._lasers:
+      return encode_reply(
+          status="UNKNOWN_CONNECTION", request_id=request_id,
+          error={
+              "code": "unknown_connection",
+              "message": "unknown connection '%s'" % connection,
+              "retryable": False,
+          },
+      )
+    ctrl = self._outer._lasers[base]
+    if not ctrl.isConnected():
+      return encode_reply(
+          status="ERROR", request_id=request_id,
+          error={
+              "code": "laser_disconnected",
+              "message": "laser disconnected",
+              "retryable": True,
+          },
+      )
+    if is_monitor:
+      return encode_reply(
+          status="ERROR", request_id=request_id,
+          error={
+              "code": "cannot_program_monitor",
+              "message": "cannot program monitor '%s'" % connection,
+              "retryable": False,
+          },
+      )
+    if param is None or param not in self._outer.WRITABLE_PARAMS:
+      return encode_reply(
+          status="ERROR", request_id=request_id,
+          error={
+              "code": "unknown_writable_param",
+              "message": ("unknown writable param '%s' in '%s'"
+                          % (param, connection)),
+              "retryable": False,
+          },
+      )
+
+    self._outer._log("ZMQ: PROGRAM_VALUE %s = %s" % (connection, value))
+
+    # Dispatch to controller's Qt main thread via Future round-trip.
+    future = concurrent.futures.Future()
+    ctrl.executeRemoteCommand(param, value, future)
+    try:
+      result = future.result(timeout=10.0)
+    except concurrent.futures.TimeoutError:
+      return encode_reply(
+          status="TIMEOUT", request_id=request_id,
+          error={
+              "code": "command_timeout",
+              "message": "timeout waiting for command to complete",
+              "retryable": True,
+          },
+      )
+
+    # Translate the v1 result dict to v2 envelope:
+    #  - {"status": "SUCCESS"}           -> SUCCESS
+    #  - {"status": "ERROR", "message": "rejected: ..."} -> REJECTED
+    #    (BigSky controller historically encodes rejections as ERROR
+    #     with a "rejected:" message prefix; spec §1.3 promotes to its
+    #     own enum value)
+    #  - {"status": "ERROR", "message": <other>} -> ERROR
+    rstat = result.get("status", "ERROR")
+    rmsg = result.get("message", "")
+    if rstat == "SUCCESS":
+      return encode_reply(status="SUCCESS", request_id=request_id,
+                          value=result.get("value"))
+    if rstat == "ERROR" and rmsg.lower().startswith("rejected"):
+      return encode_reply(
+          status="REJECTED", request_id=request_id,
+          error={
+              "code": "rejected_did_not_take_effect",
+              "message": rmsg,
+              "retryable": False,
+          },
+      )
+    return encode_reply(
+        status="ERROR", request_id=request_id,
+        error={
+            "code": "command_error",
+            "message": rmsg or "unknown error",
+            "retryable": False,
+        },
+    )
+
+  # ---- CHECK_VALUE ----
+  @handler("CHECK_VALUE")
+  def _handle_check(self, connection, value, args, request_id):
+    base, param, _is_monitor = self._outer._parse_connection(connection)
+    if base is None or base not in self._outer._lasers:
+      return encode_reply(
+          status="UNKNOWN_CONNECTION", request_id=request_id,
+          error={
+              "code": "unknown_connection",
+              "message": "unknown connection '%s'" % connection,
+              "retryable": False,
+          },
+      )
+    ctrl = self._outer._lasers[base]
+    if not ctrl.isConnected():
+      return encode_reply(
+          status="ERROR", request_id=request_id,
+          error={
+              "code": "laser_disconnected",
+              "message": "laser disconnected",
+              "retryable": True,
+          },
+      )
+    check_param = param if param else 'voltage'
+    if check_param not in self._outer.CHECKABLE_PARAMS:
+      return encode_reply(
+          status="ERROR", request_id=request_id,
+          error={
+              "code": "unknown_monitor_param",
+              "message": ("unknown monitor param '%s' in '%s'"
+                          % (check_param, connection)),
+              "retryable": False,
+          },
+      )
+    try:
+      val, fmt = self._outer._get_monitor_value(ctrl, check_param)
+    except Exception:
+      return encode_reply(
+          status="ERROR", request_id=request_id,
+          error={
+              "code": "laser_disconnected",
+              "message": "laser disconnected",
+              "retryable": True,
+          },
+      )
+    if val is None:
+      return encode_reply(
+          status="ERROR", request_id=request_id,
+          error={
+              "code": "unknown_monitor_param",
+              "message": ("unknown monitor param '%s' in '%s'"
+                          % (check_param, connection)),
+              "retryable": False,
+          },
+      )
+    self._outer._log("ZMQ: CHECK_VALUE %s -> %s" % (connection, fmt % val))
+    return encode_reply(status="SUCCESS", request_id=request_id, value=val)
+
 
 class BigSkyZmqServer(QObject):
   """ZMQ REP+PUB server for BLACS remote control of BigSky YAG lasers.
@@ -120,26 +329,29 @@ class BigSkyZmqServer(QObject):
     return (None, "unknown monitor param '%s'" % param)
 
   def _server_loop(self):
-    """Main ZMQ server loop running on the daemon thread."""
+    """Main ZMQ server loop running on the daemon thread.
+
+    PUB-SUB (per-laser monitors + heartbeat) is handled inline against a
+    raw zmq.PUB socket. REQ-REP is delegated to ``_BigSkyV2Server``,
+    which wraps a ``ZmqRepTransport`` and uses ``serve_once`` to
+    block-with-timeout, parse, dispatch via @handler methods, and reply.
+    """
     ctx = zmq.Context.instance()
 
-    rep_sock = ctx.socket(zmq.REP)
-    rep_sock.bind("tcp://*:%d" % self.rep_port)
-    rep_sock.RCVTIMEO = 250  # ms, so we can check stop_event frequently
+    transport = ZmqRepTransport("tcp://*:%d" % self.rep_port,
+                                recv_timeout_ms=250)
+    self._v2 = _BigSkyV2Server(self, transport)
 
     pub_sock = ctx.socket(zmq.PUB)
     pub_sock.bind("tcp://*:%d" % self.pub_port)
 
     pub_counter = 0
 
-    def reply(obj):
-      rep_sock.send(json.dumps(obj).encode())
-
     def publish(topic, value=""):
       msg = "%s %s" % (topic, value) if value else topic
       pub_sock.send_string(msg)
 
-    self._log("ZMQ: server loop running.")
+    self._log("ZMQ: server loop running (v2 protocol).")
 
     while not self._stop_event.is_set():
       # --- PUB-SUB broadcasting ---
@@ -163,80 +375,18 @@ class BigSkyZmqServer(QObject):
       if pub_counter % 4 == 0:
         publish("heartbeat")
 
-      # --- REQ-REP handling ---
+      # --- REQ-REP via v2 base class. serve_once blocks up to 250ms
+      # on REP; returns False on timeout, True on a dispatched message.
       try:
-        req = rep_sock.recv()
-      except zmq.error.Again:
-        continue
+        self._v2.serve_once(timeout_ms=250)
       except Exception as e:
-        self._log("ZMQ: socket error: %s" % str(e)); break
-
-      try:
-        data = json.loads(req.decode())
-        action = data.get("action", "")
-        connection = data.get("connection", "")
-        value = data.get("value", None)
-        wait_for_lock = data.get("wait_for_lock", False)
-      except Exception:
-        reply({"status": "ERROR", "message": "bad_json"}); continue
-
-      # HELLO
-      if action == "HELLO":
-        self._log("ZMQ: HELLO received")
-        # Notify all lasers that BLACS is connected (thread-safe signal → Qt main thread)
-        for ctrl in list(self._lasers.values()):
-          ctrl._blacsHelloReceived.emit()
-        reply({"status": "SUCCESS"}); continue
-
-      # Parse connection name into (base, param, is_monitor)
-      base, param, is_monitor = self._parse_connection(connection)
-      if base is None or base not in self._lasers:
-        reply({"status": "ERROR", "message": "unknown connection '%s'" % connection}); continue
-      ctrl = self._lasers[base]
-
-      # Early disconnect check — applies to both CHECK_VALUE and PROGRAM_VALUE
-      if not ctrl.isConnected():
-        reply({"status": "ERROR", "message": "laser disconnected"}); continue
-
-      # CHECK_VALUE
-      if action == "CHECK_VALUE":
-        check_param = param if param else 'voltage'
-        if check_param not in self.CHECKABLE_PARAMS:
-          reply({"status": "ERROR", "message": "unknown monitor param '%s' in '%s'" % (check_param, connection)}); continue
-        try:
-          val, fmt = self._get_monitor_value(ctrl, check_param)
-        except Exception as e:
-          reply({"status": "ERROR", "message": "laser disconnected"}); continue
-        if val is None:
-          reply({"status": "ERROR", "message": "unknown monitor param '%s' in '%s'" % (check_param, connection)}); continue
-        self._log("ZMQ: CHECK_VALUE %s -> %s" % (connection, fmt % val))
-        reply({"status": "SUCCESS", "connection": connection, "value": val}); continue
-
-      # PROGRAM_VALUE
-      if action == "PROGRAM_VALUE":
-        if is_monitor:
-          reply({"status": "ERROR", "message": "cannot program monitor '%s'" % connection}); continue
-        if param is None or param not in self.WRITABLE_PARAMS:
-          reply({"status": "ERROR", "message": "unknown writable param '%s' in '%s'" % (param, connection)}); continue
-
-        self._log("ZMQ: PROGRAM_VALUE %s = %s (wait_for_lock=%s)" % (connection, value, wait_for_lock))
-
-        # Dispatch to controller's main thread via signal/slot + Future
-        future = concurrent.futures.Future()
-        ctrl.executeRemoteCommand(param, value, future)
-        try:
-          result = future.result(timeout=10.0)
-        except concurrent.futures.TimeoutError:
-          reply({"status": "ERROR", "message": "timeout waiting for command to complete"})
-        else:
-          reply(result)
-        continue
-
-      # Unknown action
-      reply({"status": "ERROR", "message": "unknown action '%s'" % action})
+        self._log("ZMQ: dispatch error: %s" % str(e))
+        # Don't break — the base class catches handler exceptions and
+        # returns ERROR replies; a true unrecoverable error would have
+        # come from the transport, in which case retry on next iter.
 
     # Cleanup
-    rep_sock.close()
+    transport.close()
     pub_sock.close()
     self._log("ZMQ: server loop exited.")
 
