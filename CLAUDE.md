@@ -26,12 +26,20 @@ Without a laser connected, the GUI runs in dummy mode with no serial port.
 | File | Purpose |
 |------|---------|
 | `HugeSkyController.pyw` | Main hub - discovers lasers on COM ports, creates tabbed interface per laser |
-| `BigSkyControllerAmbitious.py` | `SingleLaserController` class - per-laser control widget (the main code) |
+| `BigSkyControllerAmbitious.py` | `SingleLaserController` shell - pyqtSignal declarations + `__init__` (UI wiring + state init). 164 LOC; the bulk lives in the 4 mixins below. |
+| `serial_io.py` | `SerialIOMixin` - `_sendCommand` gateway, disconnect/reconnect lifecycle, `safeExit` |
+| `remote_bridge.py` | `RemoteBridgeMixin` - ZMQ-to-Qt main-thread bridge (`executeRemoteCommand`, `_handleRemoteCommand` pyqtSlot, six `_remoteSet*` handlers, `_onBlacsHello`) |
+| `compound_sequences.py` | `CompoundSequencesMixin` - multi-step state-machine ops (`startLaser`, `stopLaser`, `startWarmup`, `toggleKeepWarm`, `pollTemperature`, `_evaluateKeepWarm`) |
+| `laser_commands.py` | `LaserCommandsMixin` - setters/getters/status indicators + `_TRAILING_INT_RE` (~31 methods, includes `_setLampMode` verify-on-readback) |
 | `GuiBigSkyWidget.ui` | Qt Designer XML defining the widget layout (loaded by `uic.loadUiType`) |
 | `laserNames.pkl` | Pickle file mapping serial numbers to user-assigned laser labels |
 | `CalibrationFiles/` | Per-laser calibration CSVs (voltage -> power mapping) |
+| `tests/` | B1-B7 canonical-invariant test suite (17 tests, all pass in `guis` env) |
+| `docs/bigsky-mixin-extraction-plan.md` | Post-extraction record of the 4-step mixin migration |
 | `Big Sky LabView/` | Reference LabView code from SteimleLab (Greg Hall, Nov 2018) |
 | `Big Sky YAG Manual.pdf` | Hardware manual for the BigSky Nd:YAG laser |
+
+**Class layout**: `SingleLaserController(SerialIOMixin, RemoteBridgeMixin, CompoundSequencesMixin, LaserCommandsMixin, QtWidgets.QWidget, Ui_Widget)`. MRO resolves methods left-to-right. PyQt5 metaclass constraint: pyqtSignals (`_remoteCommandRequested`, `_blacsHelloReceived`, `connectionStatusChanged`) MUST stay declared on `SingleLaserController` itself — mixins USE them via `self.signal.emit(...)` but cannot DECLARE them.
 
 ## Critical Convention: UI Widget Names
 
@@ -45,12 +53,12 @@ The `.ui` file and `.py` file are tightly coupled through `uic.loadUiType`. Widg
 
 ### Serial Error Handling Convention
 
-All serial I/O **must** route through `_sendCommand(cmd_bytes)` in `BigSkyControllerAmbitious.py`. This method:
+All serial I/O **must** route through `_sendCommand(cmd_bytes)` in `serial_io.py` (`SerialIOMixin._sendCommand`). This method:
 - Returns the response string on success, or `None` on failure
 - Catches `SerialException`, `OSError`, `UnicodeDecodeError`
 - Calls `_handleDisconnect()` on any serial error
 
-Raw `self.ser.*` calls should only appear in three places:
+Raw `self.ser.*` calls should only appear in three places — all inside `serial_io.py`:
 1. `_sendCommand()` itself
 2. `_attemptReconnect()` (needs to test the port directly)
 3. `safeExit()` cleanup (wrapped in try/except)
