@@ -105,7 +105,22 @@ Mode changes (Q-switch mode, lamp mode) require the laser to be in standby first
 
 This program is integrated into the BLACS experiment control system (labscript-suite at `C:\Users\radmo\labscript-suite`).
 
-**Read `C:\Users\radmo\labscript-suite\userlib\user_devices\BLACS_COMMUNICATION_CONTRACT.md` for the full communication protocol** — it defines the ZMQ JSON format (REQ-REP + PUB-SUB), connection naming conventions, and BLACS shot lifecycle.
+**Protocol** (2026-05-23): the REQ-REP side speaks the **v2 RemoteControl
+protocol**. The server is composition-based: `BigSkyZmqServer(QObject)`
+owns the daemon thread + raw `zmq.PUB` socket; an inner
+`_BigSkyV2Server(RemoteControlServerBase)` (imported from parent's
+`userlib/external_gui_lib/zmq_v2.py`) dispatches REQ-REP via
+`@handler`-decorated methods (HELLO/PROGRAM_VALUE/CHECK_VALUE) and
+returns v2 envelopes with `id` echo, `status` enum, structured
+`error.{code,message,retryable}`, and dynamic `connections` advertisement
+in the HELLO reply (Q1 hub-mode). PyQt5 signal emit on HELLO
+(`_blacsHelloReceived`) happens before reply build per blacs-expert
+audit. See parent docs:
+[`docs/remotecontrol-zmq-protocol-v2.md`](../../docs/remotecontrol-zmq-protocol-v2.md).
+
+The historical v1 contract at
+[`userlib/user_devices/BLACS_COMMUNICATION_CONTRACT.md`](../../userlib/user_devices/BLACS_COMMUNICATION_CONTRACT.md)
+is DEPRECATED; v2 servers refuse v1 envelopes per Q4 hard sunset.
 
 - **BLACS device code**: `C:\Users\radmo\labscript-suite\userlib\user_devices\BigSkyHub\`
 - **Connection table**: `C:\Users\radmo\labscript-suite\userlib\labscriptlib\Main_Experiment\connection_table.py`
