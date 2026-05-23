@@ -250,6 +250,9 @@ class BigSkyZmqServer(QObject):
   DEFAULT_PUB_PORT = 55541
 
   # Valid parameter names for PROGRAM_VALUE commands
+  # Future cleanup item (review I3 2026-05-23): extract _REMOTE_CMD_TIMEOUT_S
+  # to module scope once we touch this file for another reason. Today it's
+  # passed verbatim to future.result(...) inside _BigSkyV2Server below.
   WRITABLE_PARAMS = {'voltage', 'shutter', 'lamps', 'qswitch', 'lamp_mode',
                      'qswitch_mode', 'warmup', 'start_lasing', 'stop',
                      'keep_warm'}
@@ -353,6 +356,16 @@ class BigSkyZmqServer(QObject):
 
     self._log("ZMQ: server loop running (v2 protocol).")
 
+    # Transport-failure circuit breaker (review I2 2026-05-23). The base
+    # class catches handler exceptions and returns ERROR replies, so any
+    # exception escaping serve_once is transport-level. We tolerate a few
+    # in a row (PUB-side recovers on next iter, REP-side context bounces)
+    # but break the loop after MAX_CONSECUTIVE to avoid hot-spinning when
+    # the socket is truly dead. v1 also `break`d on any non-Again socket
+    # error -- we restore that safety net with a small tolerance window.
+    MAX_CONSECUTIVE_TRANSPORT_FAILURES = 5
+    consecutive_failures = 0
+
     while not self._stop_event.is_set():
       # --- PUB-SUB broadcasting ---
       pub_counter += 1
@@ -379,15 +392,21 @@ class BigSkyZmqServer(QObject):
       # on REP; returns False on timeout, True on a dispatched message.
       try:
         self._v2.serve_once(timeout_ms=250)
+        consecutive_failures = 0
       except Exception as e:
-        self._log("ZMQ: dispatch error: %s" % str(e))
-        # Don't break — the base class catches handler exceptions and
-        # returns ERROR replies; a true unrecoverable error would have
-        # come from the transport, in which case retry on next iter.
+        consecutive_failures += 1
+        self._log("ZMQ: dispatch error (%d/%d): %s"
+                  % (consecutive_failures,
+                     MAX_CONSECUTIVE_TRANSPORT_FAILURES, str(e)))
+        if consecutive_failures >= MAX_CONSECUTIVE_TRANSPORT_FAILURES:
+          self._log("ZMQ: too many consecutive transport failures; "
+                    "stopping server loop.")
+          break
 
     # Cleanup
     transport.close()
     pub_sock.close()
+    self._v2 = None  # release back-ref (review M2 2026-05-23)
     self._log("ZMQ: server loop exited.")
 
 
