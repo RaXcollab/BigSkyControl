@@ -249,3 +249,19 @@ def test_B8_ping_returns_uptime(make_v2_pair):
     assert reply["id"] == 55
     assert "uptime_seconds" in reply
     assert reply["server"] == "BigSkyLasers"
+
+
+def test_B8_serve_once_propagates_transport_exception(make_v2_pair):
+    """Transport-level errors MUST propagate, not be swallowed (BigSky M4,
+    review item from fixup 960b5b5). The _server_loop's circuit breaker
+    (MAX_CONSECUTIVE_TRANSPORT_FAILURES=5) depends on this contract:
+    if serve_once silently returned False instead of raising, the loop
+    would hot-spin against a dead socket forever."""
+    outer, client_t, v2_server = make_v2_pair(
+        lasers={"YAG_1": _make_fake_ctrl()})
+    v2_server._transport.recv = mock.Mock(
+        side_effect=RuntimeError("simulated transport death"))
+
+    for _ in range(3):
+        with pytest.raises(RuntimeError, match="simulated transport death"):
+            v2_server.serve_once(timeout_ms=10)

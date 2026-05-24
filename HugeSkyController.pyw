@@ -33,6 +33,17 @@ from zmq_v2 import (
 )
 
 
+# --- Module-level constants ---
+
+# Max wall time we wait for SingleLaserController's main-thread Qt slot
+# (executeRemoteCommand -> _handleRemoteCommand) to complete and write
+# its Future result. Exceeding this returns v2 TIMEOUT to BLACS. 10s
+# accommodates compound sequences (startWarmup, startLaser) which step
+# the laser through multi-byte command sequences with verify-on-readback;
+# simple writes (voltage, shutter) complete in well under a second.
+_REMOTE_CMD_TIMEOUT_S = 10.0
+
+
 # --- ZMQ Server for BLACS integration ---
 
 
@@ -130,7 +141,7 @@ class _BigSkyV2Server(RemoteControlServerBase):
     future = concurrent.futures.Future()
     ctrl.executeRemoteCommand(param, value, future)
     try:
-      result = future.result(timeout=10.0)
+      result = future.result(timeout=_REMOTE_CMD_TIMEOUT_S)
     except concurrent.futures.TimeoutError:
       return encode_reply(
           status="TIMEOUT", request_id=request_id,
@@ -250,9 +261,6 @@ class BigSkyZmqServer(QObject):
   DEFAULT_PUB_PORT = 55541
 
   # Valid parameter names for PROGRAM_VALUE commands
-  # Future cleanup item (review I3 2026-05-23): extract _REMOTE_CMD_TIMEOUT_S
-  # to module scope once we touch this file for another reason. Today it's
-  # passed verbatim to future.result(...) inside _BigSkyV2Server below.
   WRITABLE_PARAMS = {'voltage', 'shutter', 'lamps', 'qswitch', 'lamp_mode',
                      'qswitch_mode', 'warmup', 'start_lasing', 'stop',
                      'keep_warm'}
