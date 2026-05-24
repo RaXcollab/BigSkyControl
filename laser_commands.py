@@ -133,13 +133,13 @@ class LaserCommandsMixin:
     response = self._sendCommand(cmd_bytes)
     if response is None:
       msg = "rejected: serial failure on %s" % cmd_label
-      return {"status": "ERROR", "message": msg}
+      return {"status": "REJECTED", "code": "serial_failure", "message": msg}
     m = _TRAILING_INT_RE.search(response.strip())
     if m is None:
       msg = "rejected: could not parse %s response (%r)" % (cmd_label, response)
       self.terminalOutputTextBrowser.append(
           "<p style='color: red'>%s — flashLampMode unchanged</p>" % msg)
-      return {"status": "ERROR", "message": msg}
+      return {"status": "REJECTED", "code": "parse_failure", "message": msg}
     actual = int(m.group(1))
     with self._stateLock: self.flashLampMode = actual
     if actual == 0:
@@ -158,7 +158,8 @@ class LaserCommandsMixin:
       msg = "rejected: %s did not take effect (got %d)" % (cmd_label, actual)
       self.terminalOutputTextBrowser.append(
           "<p style='color: orange'>Warning: %s</p>" % msg)
-      return {"status": "ERROR", "message": msg}
+      return {"status": "REJECTED",
+              "code": "did_not_take_effect", "message": msg}
     return {"status": "SUCCESS"}
 
   def setFlashLampInternal(self):

@@ -141,19 +141,36 @@ class _BigSkyV2Server(RemoteControlServerBase):
           },
       )
 
-    # Translate the v1 result dict to v2 envelope:
-    #  - {"status": "SUCCESS"}           -> SUCCESS
-    #  - {"status": "ERROR", "message": "rejected: ..."} -> REJECTED
-    #    (BigSky controller historically encodes rejections as ERROR
-    #     with a "rejected:" message prefix; spec §1.3 promotes to its
-    #     own enum value)
-    #  - {"status": "ERROR", "message": <other>} -> ERROR
+    # Translate the controller result dict to v2 envelope:
+    #  - {"status": "SUCCESS"}                          -> SUCCESS
+    #  - {"status": "REJECTED", "code": "...", "message": "..."}
+    #                                                   -> REJECTED w/ code
+    #    (preferred path — controllers in laser_commands.py + remote_bridge.py
+    #     return this structured shape as of item 2B 2026-05-24)
+    #  - {"status": "ERROR", "message": "rejected: ..."} -> REJECTED safety net
+    #    (legacy v1 prefix-sniff; kept as a one-cycle safety net per T6.2
+    #     audit. Remove only after grep confirms zero "rejected:" string
+    #     constructions remain in the mixins.)
+    #  - {"status": "ERROR", "message": <other>}        -> ERROR
     rstat = result.get("status", "ERROR")
     rmsg = result.get("message", "")
     if rstat == "SUCCESS":
       return encode_reply(status="SUCCESS", request_id=request_id,
                           value=result.get("value"))
+    if rstat == "REJECTED":
+      return encode_reply(
+          status="REJECTED", request_id=request_id,
+          error={
+              "code": result.get("code", "rejected_unknown"),
+              "message": rmsg,
+              "retryable": False,
+          },
+      )
     if rstat == "ERROR" and rmsg.lower().startswith("rejected"):
+      # SAFETY NET (legacy v1 string-sniff). Should be unreachable after
+      # 2B since all 10 mixin sites now emit structured REJECTED. Leaving
+      # in place for one cycle so a missed mixin site degrades gracefully
+      # instead of surfacing as a generic ERROR.
       return encode_reply(
           status="REJECTED", request_id=request_id,
           error={

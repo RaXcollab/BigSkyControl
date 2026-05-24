@@ -38,10 +38,22 @@ def zmq_v2():
     return zmq_v2
 
 
-def _make_fake_ctrl(connected=True, mode='internal'):
+def _make_fake_ctrl(connected=True, mode='internal', reject=None):
     """Stand-in for a SingleLaserController with just enough surface for
-    the v2 dispatcher. ``executeRemoteCommand`` immediately fulfills the
-    future with SUCCESS unless ``reject=True`` is passed via value."""
+    the v2 dispatcher. ``executeRemoteCommand`` writes a result dict to
+    the Future per the contract in remote_bridge.py.
+
+    Reject sentinels via the ``value`` arg of executeRemoteCommand:
+      999  -> REJECTED with code 'did_not_take_effect'  (per-item 2B)
+      998  -> REJECTED with code 'voltage_out_of_range'
+      997  -> REJECTED with code 'lamps_not_active'
+      996  -> REJECTED with code 'lamp_mode_requires_standby'
+      995  -> REJECTED with code 'invalid_lamp_mode'
+      994  -> legacy ERROR with 'rejected: ...' prefix (exercises the
+              dispatcher's safety-net branch — see HugeSkyController.pyw
+              dispatch section)
+      else -> SUCCESS
+    """
     ctrl = mock.MagicMock()
     ctrl.isConnected.return_value = bool(connected)
     ctrl.getTemperature.return_value = 30.5
@@ -52,11 +64,28 @@ def _make_fake_ctrl(connected=True, mode='internal'):
     ctrl.getLampMode.return_value = 1
     ctrl.getQSwitchMode.return_value = 2
 
+    _REJECT_MAP = {
+        999: ("did_not_take_effect",
+              "rejected: lpm0 did not take effect (got 1)"),
+        998: ("voltage_out_of_range",
+              "rejected: voltage 1500 out of range [500,1400]"),
+        997: ("lamps_not_active",
+              "rejected: lamps not active (cannot open shutter)"),
+        996: ("lamp_mode_requires_standby",
+              "rejected: laser active (must be in standby)"),
+        995: ("invalid_lamp_mode",
+              "rejected: invalid lamp_mode 7 (expected 0 or 1)"),
+    }
+
     def exec_remote(cmd, value, future):
-        # Sentinel value 999 -> simulate a "rejected: ..." path.
-        if value == 999:
+        if value == 994:
+            # Legacy v1-style ERROR with 'rejected:' prefix -- the safety net
             future.set_result({"status": "ERROR",
-                               "message": "rejected: simulated"})
+                               "message": "rejected: legacy v1 shape"})
+        elif value in _REJECT_MAP:
+            code, msg = _REJECT_MAP[value]
+            future.set_result({"status": "REJECTED",
+                               "code": code, "message": msg})
         else:
             future.set_result({"status": "SUCCESS"})
 
@@ -169,20 +198,50 @@ def test_B8_program_value_success_path(make_v2_pair):
     ctrl.executeRemoteCommand.assert_called_once()
 
 
-def test_B8_program_value_rejected_maps_to_REJECTED_status(make_v2_pair):
-    """v1 'rejected:' message prefix -> v2 REJECTED enum status
-    (spec §1.3 promotes BigSky's rejected futures to first-class)."""
+@pytest.mark.parametrize("value,expected_code,message_substring", [
+    (999, "did_not_take_effect", "did not take effect"),
+    (998, "voltage_out_of_range", "1500"),
+    (997, "lamps_not_active", "lamps not active"),
+    (996, "lamp_mode_requires_standby", "must be in standby"),
+    (995, "invalid_lamp_mode", "invalid lamp_mode"),
+])
+def test_B8_program_value_structured_REJECTED_per_category(
+        make_v2_pair, value, expected_code, message_substring):
+    """Per item 2B (T6.2 audit), each controller rejection category MUST
+    surface its specific machine-readable `code` and preserve the
+    operator-visible value in `message`. No central enum — error.code
+    is a server-defined string per spec §1.3."""
     ctrl = _make_fake_ctrl()
     outer, client_t, v2_server = make_v2_pair(lasers={"YAG_1": ctrl})
 
     reply = _roundtrip(client_t, v2_server, {
         "v": 2, "id": 7, "action": "PROGRAM_VALUE",
-        "connection": "YAG_1_voltage", "value": 999,  # triggers rejection
+        "connection": "YAG_1_voltage", "value": value,
+    })
+
+    assert reply["status"] == "REJECTED"
+    assert reply["error"]["code"] == expected_code
+    assert message_substring.lower() in reply["error"]["message"].lower()
+    assert reply["error"]["retryable"] is False
+
+
+def test_B8_legacy_rejected_prefix_falls_through_safety_net(make_v2_pair):
+    """Safety-net branch in HugeSkyController dispatch: a controller that
+    still emits the v1 ERROR+'rejected:' shape (e.g. a mixin site missed
+    during the 2B migration) MUST still translate to REJECTED with the
+    legacy `rejected_did_not_take_effect` code. Per T6.2 audit, this
+    branch stays in place for one cycle as a graceful-degradation hedge."""
+    ctrl = _make_fake_ctrl()
+    outer, client_t, v2_server = make_v2_pair(lasers={"YAG_1": ctrl})
+
+    reply = _roundtrip(client_t, v2_server, {
+        "v": 2, "id": 8, "action": "PROGRAM_VALUE",
+        "connection": "YAG_1_voltage", "value": 994,  # legacy shape
     })
 
     assert reply["status"] == "REJECTED"
     assert reply["error"]["code"] == "rejected_did_not_take_effect"
-    assert "rejected" in reply["error"]["message"].lower()
+    assert "legacy" in reply["error"]["message"].lower()
 
 
 def test_B8_program_value_unknown_connection_returns_UNKNOWN_CONNECTION(
