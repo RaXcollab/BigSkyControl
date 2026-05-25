@@ -65,16 +65,36 @@ def _make_fake_ctrl(connected=True, mode='internal', reject=None):
     ctrl.getQSwitchMode.return_value = 2
 
     _REJECT_MAP = {
+        # lamp mode set (laser_commands.py + remote_bridge.py)
         999: ("did_not_take_effect",
               "rejected: lpm0 did not take effect (got 1)"),
+        # voltage range check (remote_bridge.py:133)
         998: ("voltage_out_of_range",
               "rejected: voltage 1500 out of range [500,1400]"),
+        # shutter open without lamps (remote_bridge.py:154)
         997: ("lamps_not_active",
               "rejected: lamps not active (cannot open shutter)"),
+        # lamp_mode change while laser active (remote_bridge.py:208)
         996: ("lamp_mode_requires_standby",
               "rejected: laser active (must be in standby)"),
+        # invalid lamp_mode value (remote_bridge.py:215)
         995: ("invalid_lamp_mode",
               "rejected: invalid lamp_mode 7 (expected 0 or 1)"),
+        # qswitch arm without lamps+shutter (remote_bridge.py:188)
+        993: ("qswitch_requires_lamps_and_shutter",
+              "rejected: requires lamps active + shutter open"),
+        # qswitch_mode change while laser active (remote_bridge.py:222)
+        992: ("qswitch_mode_requires_standby",
+              "rejected: laser active (must be in standby)"),
+        # invalid qswitch_mode value (remote_bridge.py:230)
+        991: ("invalid_qswitch_mode",
+              "rejected: invalid qswitch_mode 9 (expected 0/1/2)"),
+        # serial write failure inside _setLampMode (laser_commands.py:135)
+        990: ("serial_failure",
+              "rejected: serial failure on >lpm1"),
+        # response parse failure inside _setLampMode (laser_commands.py:139)
+        989: ("parse_failure",
+              "rejected: could not parse >lpm1 response ('garbage')"),
     }
 
     def exec_remote(cmd, value, future):
@@ -204,6 +224,11 @@ def test_B8_program_value_success_path(make_v2_pair):
     (997, "lamps_not_active", "lamps not active"),
     (996, "lamp_mode_requires_standby", "must be in standby"),
     (995, "invalid_lamp_mode", "invalid lamp_mode"),
+    (993, "qswitch_requires_lamps_and_shutter", "lamps active + shutter open"),
+    (992, "qswitch_mode_requires_standby", "must be in standby"),
+    (991, "invalid_qswitch_mode", "invalid qswitch_mode"),
+    (990, "serial_failure", "serial failure"),
+    (989, "parse_failure", "could not parse"),
 ])
 def test_B8_program_value_structured_REJECTED_per_category(
         make_v2_pair, value, expected_code, message_substring):
