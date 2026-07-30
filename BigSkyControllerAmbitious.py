@@ -359,13 +359,13 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
     response = self._sendCommand(cmd_bytes)
     if response is None:
       msg = "rejected: serial failure on %s" % cmd_label
-      return {"status": "ERROR", "message": msg}
+      return {"status": "REJECTED", "code": "serial_failure", "message": msg}
     m = _TRAILING_INT_RE.search(response.strip())
     if m is None:
       msg = "rejected: could not parse %s response (%r)" % (cmd_label, response)
       self.terminalOutputTextBrowser.append(
           "<p style='color: red'>%s — flashLampMode unchanged</p>" % msg)
-      return {"status": "ERROR", "message": msg}
+      return {"status": "REJECTED", "code": "parse_failure", "message": msg}
     actual = int(m.group(1))
     with self._stateLock: self.flashLampMode = actual
     if actual == 0:
@@ -384,7 +384,8 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
       msg = "rejected: %s did not take effect (got %d)" % (cmd_label, actual)
       self.terminalOutputTextBrowser.append(
           "<p style='color: orange'>Warning: %s</p>" % msg)
-      return {"status": "ERROR", "message": msg}
+      return {"status": "REJECTED",
+              "code": "did_not_take_effect", "message": msg}
     return {"status": "SUCCESS"}
 
   def setFlashLampInternal(self):
@@ -896,16 +897,22 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
   def executeRemoteCommand(self, command, value, future=None):
     """Thread-safe remote command. Emits signal to Qt main thread.
 
-    `future` is a concurrent.futures.Future. The slot writes a dict
-    {"status": "SUCCESS"} or {"status": "ERROR", "message": ...} to it.
-    Caller should wait via future.result(timeout=...).
+    `future` is a concurrent.futures.Future. The slot writes one of three
+    dict shapes to it:
+      {"status": "SUCCESS"}
+      {"status": "REJECTED", "code": "...", "message": "..."}
+      {"status": "ERROR", "message": "..."}
+    The HugeSkyController ZMQ dispatcher translates these to v2 envelope
+    statuses (SUCCESS / REJECTED / ERROR) per docs/remotecontrol-zmq-protocol-v2.md
+    §1.3. Caller should wait via future.result(timeout=...).
     """
     self._remoteCommandRequested.emit(command, value, future)
 
   @pyqtSlot(str, object, object)
   def _handleRemoteCommand(self, command, value, future):
     """Slot runs on main/GUI thread. Dispatches remote commands and writes
-    {"status": "SUCCESS"} or {"status": "ERROR", "message": ...} to `future`.
+    one of {SUCCESS, REJECTED, ERROR} dict shapes to `future`. See
+    executeRemoteCommand docstring for the shapes.
     """
     result = {"status": "SUCCESS"}
     try:
@@ -954,7 +961,8 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
     if voltage_V < 500 or voltage_V > 1400:
       msg = "rejected: voltage %d out of range [500,1400]" % voltage_V
       self.terminalOutputTextBrowser.append("<p style='color: orange'>[ZMQ] %s</p>" % msg)
-      return {"status": "ERROR", "message": msg}
+      return {"status": "REJECTED",
+              "code": "voltage_out_of_range", "message": msg}
     # Always send — deduplication is handled by BLACS worker (_last_sent_values)
     toWrite = ">vmo{vol}\n".format(vol=str(0)+str(voltage_V) if voltage_V<1000 else str(voltage_V))
     response = self._sendCommand(toWrite)
@@ -975,7 +983,8 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
     if state and not self.activeStatus:
       msg = "rejected: lamps not active (cannot open shutter)"
       self.terminalOutputTextBrowser.append("<p style='color: orange'>[ZMQ] %s</p>" % msg)
-      return {"status": "ERROR", "message": msg}
+      return {"status": "REJECTED",
+              "code": "lamps_not_active", "message": msg}
     # Send the specific command for the target state — don't rely on cached state for toggle direction
     if state:
       response = self._sendCommand(b'>r1\n')
@@ -1009,7 +1018,8 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
     if state and (not self.activeStatus or not self.shutterStatus):
       msg = "rejected: requires lamps active + shutter open"
       self.terminalOutputTextBrowser.append("<p style='color: orange'>[ZMQ] %s</p>" % msg)
-      return {"status": "ERROR", "message": msg}
+      return {"status": "REJECTED",
+              "code": "qswitch_requires_lamps_and_shutter", "message": msg}
     # Send the specific command for the target state
     if state:
       if self.dangerMode:
@@ -1025,33 +1035,47 @@ class SingleLaserController(QtWidgets.QWidget, Ui_Widget):
     self.updateAllStatusIndicators()
 
   def _remoteSetLampMode(self, mode):
-    """Set lamp mode: 0=internal, 1=external. Requires standby."""
+    """Set lamp mode: 0=internal, 1=external. Requires standby.
+
+    Returns a structured v2 result dict: SUCCESS / REJECTED with one of
+    the codes {lamp_mode_requires_standby, invalid_lamp_mode,
+    serial_failure, parse_failure, did_not_take_effect}. Per docs/remotecontrol-zmq-protocol-v2.md
+    §1.3, error.code is a server-defined string (no central enum)."""
     if self.activeStatus:
       msg = "rejected: laser active (must be in standby)"
       self.terminalOutputTextBrowser.append(
           "<p style='color: orange'>[ZMQ] lamp_mode=%d %s</p>" % (mode, msg))
-      return {"status": "ERROR", "message": msg}
+      return {"status": "REJECTED",
+              "code": "lamp_mode_requires_standby", "message": msg}
     if mode == 0: return self.setFlashLampInternal()
     elif mode == 1: return self.setFlashLampExternal()
     else:
       msg = "rejected: invalid lamp_mode %d (expected 0 or 1)" % mode
       print(msg)
-      return {"status": "ERROR", "message": msg}
+      return {"status": "REJECTED",
+              "code": "invalid_lamp_mode", "message": msg}
 
   def _remoteSetQSwitchMode(self, mode):
-    """Set Q-switch mode: 0=internal, 1=burst, 2=external. Requires standby."""
+    """Set Q-switch mode: 0=internal, 1=burst, 2=external. Requires standby.
+
+    Returns a structured v2 result dict: SUCCESS / REJECTED with one of
+    the codes {qswitch_mode_requires_standby, invalid_qswitch_mode}.
+    Per docs/remotecontrol-zmq-protocol-v2.md §1.3, error.code is a
+    server-defined string (no central enum)."""
     if self.activeStatus:
       msg = "rejected: laser active (must be in standby)"
       self.terminalOutputTextBrowser.append(
           "<p style='color: orange'>[ZMQ] qswitch_mode=%d %s</p>" % (mode, msg))
-      return {"status": "ERROR", "message": msg}
+      return {"status": "REJECTED",
+              "code": "qswitch_mode_requires_standby", "message": msg}
     if mode == 0: self.setQSwitchInternal()
     elif mode == 1: self.setQSwitchBurst()
     elif mode == 2: self.setQSwitchExternal()
     else:
       msg = "rejected: invalid qswitch_mode %d (expected 0/1/2)" % mode
       print(msg)
-      return {"status": "ERROR", "message": msg}
+      return {"status": "REJECTED",
+              "code": "invalid_qswitch_mode", "message": msg}
 
   def safeExit(self):
     self.tempPollTimer.stop()
