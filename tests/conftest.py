@@ -30,6 +30,11 @@ sys.path.insert(0, _GUI_DIR)
 
 # ---------------------------------------------------------------- env gates
 
+# With ZMQ_V2_REQUIRED=1 a missing zmq_v2 is a loud collection error instead
+# of importorskip's silent "N skipped, exit 0".
+if os.environ.get("ZMQ_V2_REQUIRED"):
+    import zmq_v2  # noqa: F401
+
 def _try_import_controller():
     """SingleLaserController needs PyQt5 + the .ui file + pyserial."""
     try:
