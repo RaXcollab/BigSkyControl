@@ -50,10 +50,11 @@ All serial I/O **must** route through `_sendCommand(cmd_bytes)` in `BigSkyContro
 - Catches `SerialException`, `OSError`, `UnicodeDecodeError`
 - Calls `_handleDisconnect()` on any serial error
 
-Raw `self.ser.*` calls should only appear in three places:
+Raw `self.ser.*` calls should only appear in four places:
 1. `_sendCommand()` itself
 2. `_attemptReconnect()` (needs to test the port directly)
 3. `safeExit()` cleanup (wrapped in try/except)
+4. `_handleDisconnect()` (`self.ser.close()` on the dead port)
 
 Every caller of `_sendCommand()` must check for `None` return and bail out (typically `if response is None: return`). Response parsing (`int()`, `float()` casts) should be wrapped in `try/except ValueError`.
 
@@ -79,7 +80,7 @@ Every caller of `_sendCommand()` must check for `None` return and bail out (typi
 ## Operational Parameters
 
 - **Temperature thresholds**: <37C = too cold (blue), 37-39C = warming (gold), >=39C = operating (green)
-- **Default warmup voltage**: 725V (below lasing threshold, safe for warmup)
+- **Warmup voltage**: 725V is operator convention (below lasing threshold) — `startWarmup()` does **not** set voltage; whatever is currently programmed stays in effect
 - **Voltage range**: 500-1400V
 - **Max frequency**: 56 Hz (30 Hz is comfortable for external trigger)
 - **External trigger**: Pin 4 (+) and Pin 9 (-) on 9-pin serial connector, +5V 100us pulse
@@ -141,11 +142,13 @@ This program is integrated into the BLACS experiment control system (labscript-s
 
 Same pattern for `YAG_2_*`. Typical triggered mode: Q-switch internal (0) + flashlamp external (1).
 
+**Auto Arm Ext (a.k.a. Auto Re-Arm) is BLACS-side only — no GUI code implements it.** The checkbox is created in `BigSkyTab` (`userlib/user_devices/BigSkyHub/blacs_tabs.py:361`, widget label `"Auto Arm Ext"`); arming runs in `BigSkyWorker._auto_arm_if_needed` (`blacs_workers.py:466`) from both branches of `transition_to_buffered`, idempotent via `_is_armed` plus a CHECK_VALUE cross-check of `lamp_mode/lamps/shutter/qswitch/qswitch_mode`. It has no dedicated connection name — it re-sends the writable connections above, so renaming those breaks auto-arm silently. **Name trap:** the tab has two `keep_warm`-named checkboxes: `_keep_warm`/`_on_keep_warm_toggle` = Auto Arm Ext (never crosses ZMQ); `_keep_warm_temp`/`_on_keep_warm_temp_toggle` = Auto Keep Warm, which is what the `YAG_1_keep_warm` connection carries (`blacs_workers.py:222`). Check which one you have before editing.
+
 **Remote command GUI sync convention:** Every function that changes hardware state (e.g., `setFlashLampExternal`, `toggleShutterStatus`) must also update the corresponding GUI widget (radio button, checkbox, label). When called by user click, the widget is already correct. But when called via ZMQ remote command (`_handleRemoteCommand` dispatch), the widget won't update unless the function explicitly sets it. This also applies to disconnect/reconnect transitions — `_handleDisconnect()` and `_handleReconnect()` must update all GUI elements since no user click triggers the change. Failure to sync causes the GUI to show stale state.
 
 ## Disconnection Resilience
 
-- **Detection**: Any `_sendCommand()` failure triggers `_handleDisconnect()`, which resets all state and shows "DISCONNECTED" in dark red
+- **Detection**: `SerialException`/`OSError` in `_sendCommand()` triggers `_handleDisconnect()` immediately; an empty response returns `None` and only disconnects after 3 consecutive empties (`_consecutiveErrors`) — isolated `None` returns leave status CONNECTED. `_handleDisconnect()` resets all state and shows "DISCONNECTED" in dark red
 - **Auto-reconnect**: `_reconnectTimer` fires every 5 seconds, validates with `>cg` temperature query, calls `_handleReconnect()` on success
 - **State restore**: `_handleReconnect()` re-queries voltage, frequency, modes, energy from the laser
 - **Signal**: `connectionStatusChanged(bool)` signal emitted on connect/disconnect — hub uses this to gray out / restore tab text
